@@ -8,7 +8,10 @@ struct SettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var autoRefreshInterval: Int = UserDefaults.standard.integer(forKey: "autoRefreshMinutes")
     @State private var allowClaudeCLIKeychainAccess: Bool = UserDefaults.standard.bool(forKey: "allowClaudeCLIKeychainAccess")
+    @State private var claudeKeychainPromptModeRaw: String = UserDefaults.standard.string(forKey: "claudeOAuthKeychainPromptMode")
+        ?? ClaudeKeychainPromptMode.onlyOnUserAction.rawValue
     @State private var allowGeminiCLIKeychainAccess: Bool = UserDefaults.standard.bool(forKey: "allowGeminiCLIKeychainAccess")
+    @State private var claudeKeychainStatusMessage: String?
     @State private var editingAccountId: UUID? = nil
     @State private var editingLabel: String = ""
     @State private var showResetConfirmation = false
@@ -17,12 +20,14 @@ struct SettingsView: View {
     enum SettingsTab: String, CaseIterable {
         case accounts = "Accounts"
         case general = "General"
+        case providers = "Providers"
         case about = "About"
 
         var icon: String {
             switch self {
             case .accounts: "person.2.fill"
             case .general: "gearshape.fill"
+            case .providers: "slider.horizontal.3"
             case .about: "info.circle"
             }
         }
@@ -41,6 +46,14 @@ struct SettingsView: View {
             Tab(SettingsTab.general.rawValue, systemImage: SettingsTab.general.icon, value: .general) {
                 ScrollView {
                     generalContent
+                        .padding(24)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+
+            Tab(SettingsTab.providers.rawValue, systemImage: SettingsTab.providers.icon, value: .providers) {
+                ScrollView {
+                    providersContent
                         .padding(24)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
@@ -262,65 +275,146 @@ struct SettingsView: View {
             .onChange(of: autoRefreshInterval) { _, newValue in
                 UserDefaults.standard.set(newValue, forKey: "autoRefreshMinutes")
             }
+        }
+    }
 
-            // Claude Weekly Limit
-            settingsRow(icon: "calendar.badge.clock", title: "Weekly Limit", subtitle: "Show Claude 7-day rate window alongside the 5-hour window") {
-                Toggle("", isOn: Binding(
-                    get: { store.showWeeklyLimit },
-                    set: { newValue in
-                        store.showWeeklyLimit = newValue
-                        UserDefaults.standard.set(newValue, forKey: "showWeeklyLimit")
-                    }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
+    private var providersContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Provider-specific settings")
+                .font(.headline)
 
-            // Claude CLI Keychain Access
-            settingsRow(icon: "key.fill", title: "Claude CLI Keychain", subtitle: "Allow Usageview to read Claude CLI credentials from Keychain (may trigger macOS prompt)") {
-                Toggle("", isOn: Binding(
-                    get: { allowClaudeCLIKeychainAccess },
-                    set: { newValue in
-                        allowClaudeCLIKeychainAccess = newValue
-                        UserDefaults.standard.set(newValue, forKey: "allowClaudeCLIKeychainAccess")
-                        if newValue {
+            Text("Tune usage windows, keychain access, and authentication behavior for each provider.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            providerCard(
+                serviceType: .claude,
+                title: "Claude",
+                subtitle: "5-hour/7-day window display and CLI keychain behavior"
+            ) {
+                settingsRow(
+                    icon: "calendar.badge.clock",
+                    title: "Show 7-day limit",
+                    subtitle: "Display Claude weekly window in the main account row"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { store.showWeeklyLimit },
+                        set: { newValue in
+                            store.showWeeklyLimit = newValue
+                            UserDefaults.standard.set(newValue, forKey: "showWeeklyLimit")
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+
+                settingsRow(
+                    icon: "key.fill",
+                    title: "Claude CLI Keychain",
+                    subtitle: "Allow reading Claude CLI credentials from Keychain"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { allowClaudeCLIKeychainAccess },
+                        set: { newValue in
+                            allowClaudeCLIKeychainAccess = newValue
+                            UserDefaults.standard.set(newValue, forKey: "allowClaudeCLIKeychainAccess")
+                            claudeKeychainStatusMessage = nil
+                            if newValue {
+                                store.claudeAuth.resetCLIKeychainReadSuppression()
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+
+                settingsRow(
+                    icon: "exclamationmark.shield",
+                    title: "Keychain Prompt Mode",
+                    subtitle: "Experimental: choose if macOS keychain prompts are allowed"
+                ) {
+                    Picker("", selection: Binding(
+                        get: { claudeKeychainPromptModeRaw },
+                        set: { newValue in
+                            claudeKeychainPromptModeRaw = newValue
+                            UserDefaults.standard.set(newValue, forKey: "claudeOAuthKeychainPromptMode")
+                            claudeKeychainStatusMessage = nil
                             store.claudeAuth.resetCLIKeychainReadSuppression()
                         }
-                    }
-                ))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-            }
-            if allowClaudeCLIKeychainAccess && store.claudeAuth.isCLIKeychainReadSuppressed {
-                Text("Claude keychain access not granted yet. Toggle off/on to retry.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 48)
-                    .padding(.top, -8)
-            }
-
-            // Gemini CLI Keychain Access
-            settingsRow(icon: "key.horizontal.fill", title: "Gemini CLI Keychain", subtitle: "Allow Usageview to read Gemini CLI credentials from Keychain (may trigger macOS prompt)") {
-                Toggle("", isOn: Binding(
-                    get: { allowGeminiCLIKeychainAccess },
-                    set: { newValue in
-                        allowGeminiCLIKeychainAccess = newValue
-                        UserDefaults.standard.set(newValue, forKey: "allowGeminiCLIKeychainAccess")
-                        if newValue {
-                            store.geminiAuth.oauthService.resetCLIKeychainReadSuppression()
+                    )) {
+                        ForEach(ClaudeKeychainPromptMode.allCases, id: \.rawValue) { mode in
+                            Text(mode.displayName).tag(mode.rawValue)
                         }
                     }
-                ))
+                    .pickerStyle(.menu)
+                    .frame(width: 190)
+                    .disabled(!allowClaudeCLIKeychainAccess)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Test Claude Keychain Access") {
+                        let creds = store.claudeAuth.readClaudeCLICredentials(interaction: .userInitiated)
+                        if creds != nil {
+                            claudeKeychainStatusMessage = "Claude keychain credentials loaded successfully."
+                        } else {
+                            claudeKeychainStatusMessage = "Could not read credentials (denied, missing, or cooldown active)."
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(!allowClaudeCLIKeychainAccess)
+                }
+
+                if allowClaudeCLIKeychainAccess && store.claudeAuth.isCLIKeychainReadSuppressed {
+                    Text("Keychain access was denied in this session. Change mode or retry with the test button.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.top, -4)
+                }
+
+                if let claudeKeychainStatusMessage {
+                    Text(claudeKeychainStatusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.top, -4)
+                }
+            }
+
+            providerCard(
+                serviceType: .gemini,
+                title: "Gemini",
+                subtitle: "CLI keychain import preferences"
+            ) {
+                settingsRow(
+                    icon: "key.horizontal.fill",
+                    title: "Gemini CLI Keychain",
+                    subtitle: "Allow reading Gemini CLI credentials from Keychain"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { allowGeminiCLIKeychainAccess },
+                        set: { newValue in
+                            allowGeminiCLIKeychainAccess = newValue
+                            UserDefaults.standard.set(newValue, forKey: "allowGeminiCLIKeychainAccess")
+                            if newValue {
+                                store.geminiAuth.oauthService.resetCLIKeychainReadSuppression()
+                            }
+                        }
+                    ))
                     .toggleStyle(.switch)
                     .controlSize(.small)
+                }
+
+                if allowGeminiCLIKeychainAccess && store.geminiAuth.oauthService.isCLIKeychainReadSuppressed {
+                    Text("Gemini keychain access not granted yet. Toggle off/on to retry.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.top, -4)
+                }
             }
-            if allowGeminiCLIKeychainAccess && store.geminiAuth.oauthService.isCLIKeychainReadSuppressed {
-                Text("Gemini keychain access not granted yet. Toggle off/on to retry.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 48)
-                    .padding(.top, -8)
-            }
+
         }
     }
 
@@ -369,9 +463,12 @@ struct SettingsView: View {
                     }
                     UserDefaults.standard.removeObject(forKey: "autoRefreshMinutes")
                     UserDefaults.standard.removeObject(forKey: "allowClaudeCLIKeychainAccess")
+                    UserDefaults.standard.removeObject(forKey: "claudeOAuthKeychainPromptMode")
+                    UserDefaults.standard.removeObject(forKey: "claudeOAuthKeychainDeniedUntil")
                     UserDefaults.standard.removeObject(forKey: "allowGeminiCLIKeychainAccess")
                     autoRefreshInterval = 0
                     allowClaudeCLIKeychainAccess = false
+                    claudeKeychainPromptModeRaw = ClaudeKeychainPromptMode.onlyOnUserAction.rawValue
                     allowGeminiCLIKeychainAccess = false
                 }
             } message: {
@@ -401,6 +498,36 @@ struct SettingsView: View {
     }
 
     // MARK: - Reusable Settings Row
+
+    private func providerCard<Content: View>(
+        serviceType: ServiceType,
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ServiceIconView(serviceType: serviceType, avatarURL: nil, size: 26)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            content()
+        }
+        .padding(14)
+        .background(.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
 
     private func settingsRow<Content: View>(
         icon: String,
