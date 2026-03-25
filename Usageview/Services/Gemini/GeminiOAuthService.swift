@@ -104,6 +104,9 @@ enum GeminiOAuthError: LocalizedError {
 
 @MainActor
 final class GeminiOAuthService: Sendable {
+    private static let allowCLIKeychainAccessDefaultsKey = "allowGeminiCLIKeychainAccess"
+    private var suppressCLIKeychainReadsThisSession = false
+    var isCLIKeychainReadSuppressed: Bool { suppressCLIKeychainReadsThisSession }
 
     // Same OAuth client ID/secret used by Gemini CLI (public installed-app credentials)
     // See: https://developers.google.com/identity/protocols/oauth2#installed
@@ -297,20 +300,6 @@ final class GeminiOAuthService: Sendable {
 
     /// Try to read credentials from Gemini CLI (keychain or file)
     private func getTokenFromCLI(for accountId: UUID) async -> String? {
-        // Try macOS Keychain (gemini-cli-oauth service)
-        if let keychainCreds = readCLICredentialsFromKeychain() {
-            if let expiresAt = keychainCreds.expiresAt,
-               expiresAt <= Date.now.timeIntervalSince1970 * 1000 {
-                if let refreshToken = keychainCreds.refreshToken {
-                    if let newAccess = await refreshAccessToken(refreshToken: refreshToken, for: accountId) {
-                        return newAccess
-                    }
-                }
-            } else {
-                return keychainCreds.accessToken
-            }
-        }
-
         // Try ~/.gemini/oauth_creds.json file
         if let fileCreds = readCLICredentialsFromFile() {
             if let expiryMs = fileCreds.expiresAt,
@@ -325,6 +314,30 @@ final class GeminiOAuthService: Sendable {
             }
         }
 
+        guard UserDefaults.standard.bool(forKey: Self.allowCLIKeychainAccessDefaultsKey) else {
+            geminiOAuthLogger.debug("Gemini CLI keychain access disabled by preference")
+            return nil
+        }
+
+        guard !suppressCLIKeychainReadsThisSession else {
+            geminiOAuthLogger.debug("Skipping Gemini CLI keychain read for this session")
+            return nil
+        }
+
+        // Try macOS Keychain (gemini-cli-oauth service)
+        if let keychainCreds = readCLICredentialsFromKeychain() {
+            if let expiresAt = keychainCreds.expiresAt,
+               expiresAt <= Date.now.timeIntervalSince1970 * 1000 {
+                if let refreshToken = keychainCreds.refreshToken {
+                    if let newAccess = await refreshAccessToken(refreshToken: refreshToken, for: accountId) {
+                        return newAccess
+                    }
+                }
+            } else {
+                return keychainCreds.accessToken
+            }
+        }
+
         return nil
     }
 
@@ -333,11 +346,18 @@ final class GeminiOAuthService: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "gemini-cli-oauth",
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        guard status == errSecSuccess, let data = result as? Data else {
+            if status == errSecAuthFailed || status == errSecUserCanceled || status == errSecInteractionNotAllowed {
+                suppressCLIKeychainReadsThisSession = true
+                geminiOAuthLogger.info("Suppressing Gemini CLI keychain reads for this session (status \(status))")
+            }
+            return nil
+        }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
 
         let tokenData = (json["main-account"] as? [String: Any])
@@ -382,6 +402,10 @@ final class GeminiOAuthService: Sendable {
         }
 
         return nil
+    }
+
+    func resetCLIKeychainReadSuppression() {
+        suppressCLIKeychainReadsThisSession = false
     }
 
     func hasCredentials(for accountId: UUID) -> Bool {

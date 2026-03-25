@@ -22,6 +22,9 @@ struct ClaudeCLICredentials: Sendable {
 @MainActor
 final class AnthropicAuthService: Sendable {
     var isLoading: Bool = false
+    private static let allowCLIKeychainAccessDefaultsKey = "allowClaudeCLIKeychainAccess"
+    private var suppressCLIKeychainReadsThisSession = false
+    var isCLIKeychainReadSuppressed: Bool { suppressCLIKeychainReadsThisSession }
 
     private let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private let redirectURI = "https://console.anthropic.com/oauth/code/callback"
@@ -41,6 +44,21 @@ final class AnthropicAuthService: Sendable {
 
     /// Read OAuth credentials stored by Claude Code CLI in macOS Keychain
     func readClaudeCLICredentials() -> ClaudeCLICredentials? {
+        // Prefer file credentials first to avoid macOS keychain permission prompts.
+        if let fileCreds = readClaudeFileCredentials() {
+            return fileCreds
+        }
+
+        guard UserDefaults.standard.bool(forKey: Self.allowCLIKeychainAccessDefaultsKey) else {
+            authLogger.debug("Claude CLI keychain access disabled by preference")
+            return nil
+        }
+
+        guard !suppressCLIKeychainReadsThisSession else {
+            authLogger.debug("Skipping Claude CLI keychain read for this session")
+            return nil
+        }
+
         let serviceNames = [
             "Claude Code-credentials",
             // Fallback: hashed config dir variant
@@ -52,8 +70,11 @@ final class AnthropicAuthService: Sendable {
             }
         }
 
-        // Also try reading from ~/.claude/.credentials.json as fallback
-        return readClaudeFileCredentials()
+        return nil
+    }
+
+    func resetCLIKeychainReadSuppression() {
+        suppressCLIKeychainReadsThisSession = false
     }
 
     private func readKeychainGenericPassword(service: String) -> ClaudeCLICredentials? {
@@ -61,11 +82,16 @@ final class AnthropicAuthService: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else {
+            if status == errSecAuthFailed || status == errSecUserCanceled || status == errSecInteractionNotAllowed {
+                suppressCLIKeychainReadsThisSession = true
+                authLogger.info("Suppressing Claude CLI keychain reads for this session (status \(status))")
+            }
             authLogger.debug("Keychain read for '\(service)' returned status \(status)")
             return nil
         }

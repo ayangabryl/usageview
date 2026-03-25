@@ -7,6 +7,8 @@ struct SettingsView: View {
 
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var autoRefreshInterval: Int = UserDefaults.standard.integer(forKey: "autoRefreshMinutes")
+    @State private var allowClaudeCLIKeychainAccess: Bool = UserDefaults.standard.bool(forKey: "allowClaudeCLIKeychainAccess")
+    @State private var allowGeminiCLIKeychainAccess: Bool = UserDefaults.standard.bool(forKey: "allowGeminiCLIKeychainAccess")
     @State private var editingAccountId: UUID? = nil
     @State private var editingLabel: String = ""
     @State private var showResetConfirmation = false
@@ -273,6 +275,52 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
             }
+
+            // Claude CLI Keychain Access
+            settingsRow(icon: "key.fill", title: "Claude CLI Keychain", subtitle: "Allow Usageview to read Claude CLI credentials from Keychain (may trigger macOS prompt)") {
+                Toggle("", isOn: Binding(
+                    get: { allowClaudeCLIKeychainAccess },
+                    set: { newValue in
+                        allowClaudeCLIKeychainAccess = newValue
+                        UserDefaults.standard.set(newValue, forKey: "allowClaudeCLIKeychainAccess")
+                        if newValue {
+                            store.claudeAuth.resetCLIKeychainReadSuppression()
+                        }
+                    }
+                ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+            }
+            if allowClaudeCLIKeychainAccess && store.claudeAuth.isCLIKeychainReadSuppressed {
+                Text("Claude keychain access not granted yet. Toggle off/on to retry.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 48)
+                    .padding(.top, -8)
+            }
+
+            // Gemini CLI Keychain Access
+            settingsRow(icon: "key.horizontal.fill", title: "Gemini CLI Keychain", subtitle: "Allow Usageview to read Gemini CLI credentials from Keychain (may trigger macOS prompt)") {
+                Toggle("", isOn: Binding(
+                    get: { allowGeminiCLIKeychainAccess },
+                    set: { newValue in
+                        allowGeminiCLIKeychainAccess = newValue
+                        UserDefaults.standard.set(newValue, forKey: "allowGeminiCLIKeychainAccess")
+                        if newValue {
+                            store.geminiAuth.oauthService.resetCLIKeychainReadSuppression()
+                        }
+                    }
+                ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+            }
+            if allowGeminiCLIKeychainAccess && store.geminiAuth.oauthService.isCLIKeychainReadSuppressed {
+                Text("Gemini keychain access not granted yet. Toggle off/on to retry.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 48)
+                    .padding(.top, -8)
+            }
         }
     }
 
@@ -320,7 +368,11 @@ struct SettingsView: View {
                         store.removeAccount(id: account.id)
                     }
                     UserDefaults.standard.removeObject(forKey: "autoRefreshMinutes")
+                    UserDefaults.standard.removeObject(forKey: "allowClaudeCLIKeychainAccess")
+                    UserDefaults.standard.removeObject(forKey: "allowGeminiCLIKeychainAccess")
                     autoRefreshInterval = 0
+                    allowClaudeCLIKeychainAccess = false
+                    allowGeminiCLIKeychainAccess = false
                 }
             } message: {
                 Text("This will disconnect and remove all accounts. This cannot be undone.")
