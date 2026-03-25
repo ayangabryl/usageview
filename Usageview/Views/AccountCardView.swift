@@ -154,22 +154,20 @@ struct AccountCardView: View {
                             resetDate: account.sevenDayResetDate
                         )
                     } else {
-                        // Show binding constraint (whichever window is fuller)
-                        let fiveHour = account.fiveHourUsage ?? 0
-                        let sevenDay = account.sevenDayUsage ?? 0
-                        let bindingUsage = max(fiveHour, sevenDay)
-                        let bindingPct = min(bindingUsage / 100.0, 1.0)
-                        let bindingResetDate = sevenDay >= fiveHour ? account.sevenDayResetDate : account.fiveHourResetDate
-                        let bindingMaxHours: Double = sevenDay >= fiveHour ? 192 : (account.serviceType == .gemini ? 25 : 6)
+                        // Show the short window in collapsed mode (5h for Claude/ChatGPT, Pro for Gemini)
+                        let primaryUsage = account.fiveHourUsage ?? 0
+                        let primaryPct = min(primaryUsage / 100.0, 1.0)
+                        let primaryResetDate = account.fiveHourResetDate
+                        let primaryMaxHours: Double = account.serviceType == .gemini ? 25 : 6
 
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 RoundedRectangle(cornerRadius: 3)
                                     .fill(.primary.opacity(0.08))
                                 RoundedRectangle(cornerRadius: 3)
-                                    .fill(rateBarColor(bindingUsage))
-                                    .frame(width: max(0, geo.size.width * bindingPct))
-                                    .animation(.easeInOut(duration: 0.5), value: bindingPct)
+                                    .fill(rateBarColor(primaryUsage))
+                                    .frame(width: max(0, geo.size.width * primaryPct))
+                                    .animation(.easeInOut(duration: 0.5), value: primaryPct)
                             }
                         }
                         .frame(height: 5)
@@ -181,14 +179,14 @@ struct AccountCardView: View {
                                     .padding(.trailing, 6)
                             }
 
-                            Text("\(Int(bindingUsage))% used")
+                            Text("\(Int(primaryUsage))% used")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
                             Spacer()
 
-                            if Account.isResetReasonable(bindingResetDate, maxHours: bindingMaxHours) {
-                                Text("resets \(Account.resetLabel(for: bindingResetDate))")
+                            if Account.isResetReasonable(primaryResetDate, maxHours: primaryMaxHours) {
+                                Text("resets \(Account.resetLabel(for: primaryResetDate))")
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
                             }
@@ -519,33 +517,31 @@ struct CompactAccountRow: View {
                             }
                             .frame(maxWidth: 120)
                         } else {
-                            // Single bar — binding constraint (whichever window is fuller)
-                            let fiveHour = account.fiveHourUsage ?? 0
-                            let sevenDay = account.sevenDayUsage ?? 0
-                            let bindingUsage = max(fiveHour, sevenDay)
-                            let bindingPct = min(bindingUsage / 100.0, 1.0)
-                            let bindingResetDate = sevenDay >= fiveHour ? account.sevenDayResetDate : account.fiveHourResetDate
-                            let bindingMaxHours: Double = sevenDay >= fiveHour ? 192 : (account.serviceType == .gemini ? 25 : 6)
+                            // Single bar — short window only (5h for Claude/ChatGPT, Pro for Gemini)
+                            let primaryUsage = account.fiveHourUsage ?? 0
+                            let primaryPct = min(primaryUsage / 100.0, 1.0)
+                            let primaryResetDate = account.fiveHourResetDate
+                            let primaryMaxHours: Double = account.serviceType == .gemini ? 25 : 6
 
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
                                     RoundedRectangle(cornerRadius: 2)
                                         .fill(.primary.opacity(0.08))
                                     RoundedRectangle(cornerRadius: 2)
-                                        .fill(compactRateBarColor(bindingUsage))
-                                        .frame(width: max(0, geo.size.width * bindingPct))
-                                        .animation(.easeInOut(duration: 0.5), value: bindingPct)
+                                        .fill(compactRateBarColor(primaryUsage))
+                                        .frame(width: max(0, geo.size.width * primaryPct))
+                                        .animation(.easeInOut(duration: 0.5), value: primaryPct)
                                 }
                             }
                             .frame(maxWidth: 60, maxHeight: 4)
 
-                            Text("\(Int(bindingUsage))%")
+                            Text("\(Int(primaryUsage))%")
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundStyle(bindingUsage >= 100 ? .red : .secondary)
+                                .foregroundStyle(primaryUsage >= 100 ? .red : .secondary)
                                 .fixedSize()
 
-                            if Account.isResetReasonable(bindingResetDate, maxHours: bindingMaxHours) {
-                                Text(Account.resetLabel(for: bindingResetDate))
+                            if Account.isResetReasonable(primaryResetDate, maxHours: primaryMaxHours) {
+                                Text(Account.resetLabel(for: primaryResetDate))
                                     .font(.system(size: 9))
                                     .foregroundStyle(.tertiary)
                                     .fixedSize()

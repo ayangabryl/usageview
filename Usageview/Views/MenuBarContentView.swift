@@ -143,7 +143,7 @@ struct MenuBarContentView: View {
                 // Scrollable ordered account list
                 // Observe dataVersion to force re-render after refresh updates
                 let _ = store.dataVersion
-                ScrollView(.vertical, showsIndicators: true) {
+                ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: store.viewMode == .compact ? 1 : 4) {
                         ForEach(store.orderedAccounts) { account in
                             accountView(for: account)
@@ -839,7 +839,7 @@ struct MenuBarContentView: View {
             }
 
             if let account {
-                ScrollView {
+                ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 16) {
                         // Identity card
                         VStack(spacing: 10) {
@@ -905,7 +905,7 @@ struct MenuBarContentView: View {
                                             .frame(maxWidth: .infinity)
                                     }
 
-                                    // Toggle to show/hide weekly limit in main view
+                                    // Toggle to show/hide detailed windows in main view
                                     Toggle(isOn: Binding(
                                         get: { store.showWeeklyLimit },
                                         set: { newValue in
@@ -913,7 +913,7 @@ struct MenuBarContentView: View {
                                             UserDefaults.standard.set(newValue, forKey: "showWeeklyLimit")
                                         }
                                     )) {
-                                        Text("Show weekly limit in main view")
+                                        Text("Show 7-day limit in main view")
                                             .font(.caption)
                                     }
                                     .toggleStyle(.switch)
