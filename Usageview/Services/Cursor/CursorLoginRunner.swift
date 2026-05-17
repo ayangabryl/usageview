@@ -2,7 +2,7 @@
 import AppKit
 import Foundation
 
-/// Opens Cursor sign-in in the default browser and polls until cookies validate (CodexBar pattern).
+/// Opens Cursor sign-in in the default browser and polls until cookies validate (CodexBar `CursorLoginRunner`).
 @MainActor
 final class CursorLoginRunner {
     enum Phase: Sendable {
@@ -26,6 +26,7 @@ final class CursorLoginRunner {
     static let authURL = URL(string: "https://authenticator.cursor.sh/")!
 
     private let accountId: UUID
+    private let probe: CursorStatusProbe
     private let timeout: TimeInterval
     private let pollInterval: TimeInterval
     private let openURL: @MainActor (URL) -> Bool
@@ -33,12 +34,14 @@ final class CursorLoginRunner {
 
     init(
         accountId: UUID,
+        probe: CursorStatusProbe = CursorStatusProbe(networkTimeout: 15),
         timeout: TimeInterval = 120,
         pollInterval: TimeInterval = 2,
         openURL: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) },
         sleeper: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
     ) {
         self.accountId = accountId
+        self.probe = probe
         self.timeout = timeout
         self.pollInterval = pollInterval
         self.openURL = openURL
@@ -47,6 +50,7 @@ final class CursorLoginRunner {
 
     func run(onPhaseChange: @escaping @MainActor (Phase) -> Void) async -> Result {
         onPhaseChange(.loading)
+        BrowserCookieAccessGate.clearCooldowns()
         CookieHeaderCache.clear(accountId: accountId)
         await CursorSessionStore.shared.clearCookies()
 
@@ -55,6 +59,9 @@ final class CursorLoginRunner {
             onPhaseChange(.failed(message))
             return Result(outcome: .failed(message), session: nil)
         }
+
+        // Give the browser a moment to open before the first cookie read.
+        try? await sleeper(UInt64(1_000_000_000))
 
         let deadline = Date().addingTimeInterval(timeout)
         var lastError: Error?
@@ -69,16 +76,12 @@ final class CursorLoginRunner {
             onPhaseChange(.waitingLogin(attempt: attempt))
 
             do {
-                // CodexBar: poll off the main thread; no Keychain prompts each tick.
-                let accountId = self.accountId
-                let session = try await Task.detached(priority: .userInitiated) {
-                    let probe = CursorStatusProbe(networkTimeout: 8)
-                    return try await probe.fetchValidatedSession(
-                        accountId: accountId,
-                        allowCachedSessions: false,
-                        allowKeychainPrompt: false,
-                        loginPollMode: true)
-                }.value
+                // CodexBar: full fetch on main thread so Chrome Safe Storage Keychain can prompt.
+                let session = try await probe.fetchValidatedSession(
+                    accountId: accountId,
+                    allowCachedSessions: false,
+                    allowKeychainPrompt: true,
+                    logger: nil)
                 onPhaseChange(.success)
                 return Result(outcome: .success, session: session)
             } catch {
@@ -86,7 +89,7 @@ final class CursorLoginRunner {
             }
 
             guard Date() < deadline else { break }
-            let delay = UInt64(max(0.1, pollInterval) * 1_000_000_000)
+            let delay = UInt64(max(0.5, pollInterval) * 1_000_000_000)
             try? await sleeper(delay)
         } while true
 
@@ -96,7 +99,7 @@ final class CursorLoginRunner {
     }
 
     private static func timeoutMessage(lastError: Error?) -> String {
-        let hint = "Sign in in the browser window, then tap Import from browsers. Safari needs Full Disk Access for Usageview."
+        let hint = "Finish sign-in in the browser, visit cursor.com once, then tap Import from browsers."
         guard let lastError else {
             return "Timed out waiting for Cursor login. \(hint)"
         }
@@ -105,7 +108,7 @@ final class CursorLoginRunner {
         {
             return details
         }
-        return "Timed out waiting for Cursor login. \(hint) \(lastError.localizedDescription)"
+        return "Timed out waiting for Cursor login. \(hint)\n\(lastError.localizedDescription)"
     }
 }
 #endif

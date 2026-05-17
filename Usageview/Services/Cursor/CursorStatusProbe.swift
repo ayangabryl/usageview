@@ -26,24 +26,21 @@ struct CursorValidatedSession: Sendable {
     let cookies: [HTTPCookie]
 }
 
-/// Discovers and validates Cursor sessions via browser cookies and API checks (CodexBar pattern).
+/// Discovers and validates Cursor sessions (CodexBar `CursorStatusProbe.fetch` pattern).
 struct CursorStatusProbe: Sendable {
-    private let baseURLs = [
-        URL(string: "https://cursor.com")!,
-        URL(string: "https://www.cursor.com")!,
-    ]
+    private let baseURL = URL(string: "https://cursor.com")!
     private let timeout: TimeInterval
 
     init(networkTimeout: TimeInterval = 15) {
         self.timeout = networkTimeout
     }
 
+    /// Same flow as CodexBar: cache → strict browser pass → domain pass → stored session.
     func fetchValidatedSession(
         accountId: UUID,
         manualCookieHeader: String? = nil,
         allowCachedSessions: Bool = true,
         allowKeychainPrompt: Bool = false,
-        loginPollMode: Bool = false,
         logger: ((String) -> Void)? = nil
     ) async throws -> CursorValidatedSession {
         let log: (String) -> Void = { msg in logger?("[cursor] \(msg)") }
@@ -51,12 +48,13 @@ struct CursorStatusProbe: Sendable {
 
         if let override = CookieHeaderNormalizer.normalize(manualCookieHeader) {
             log("Using manual cookie header")
-            return try await validateCookieHeader(override, sourceLabel: "manual", accountId: accountId, cookies: [])
+            let header = CursorCookieHeader.make(from: override)
+            return try await validateCookieHeader(header, sourceLabel: "manual", accountId: accountId, cookies: [])
         }
 
         if allowCachedSessions,
            let cached = CookieHeaderCache.load(accountId: accountId),
-           !cached.cookieHeader.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+           !cached.cookieHeader.isEmpty
         {
             log("Using cached cookie header from \(cached.sourceLabel)")
             do {
@@ -77,9 +75,10 @@ struct CursorStatusProbe: Sendable {
         if browsers.isEmpty {
             throw CursorProbeError.noSessionCookie(details: report.failureMessage(
                 apiRejected: [],
-                safariBlocked: false))
+                chromeSkipped: true))
         }
 
+        // Pass 1: known session cookie names (CodexBar)
         if let session = await scanBrowsers(
             browsers,
             accountId: accountId,
@@ -95,31 +94,30 @@ struct CursorStatusProbe: Sendable {
             return session
         }
 
-        if !loginPollMode {
-            if let session = await scanBrowsers(
-                browsers,
-                accountId: accountId,
-                report: &report,
-                importSessions: { browser in
-                    CursorCookieImporter.importDomainCookieSessionsIfPresent(
-                        browser: browser,
-                        allowKeychainPrompt: allowKeychainPrompt,
-                        logger: logger)
-                },
-                log: log)
-            {
-                return session
-            }
+        // Pass 2: any domain cookies + API proof (CodexBar)
+        if let session = await scanBrowsers(
+            browsers,
+            accountId: accountId,
+            report: &report,
+            importSessions: { browser in
+                CursorCookieImporter.importDomainCookieSessionsIfPresent(
+                    browser: browser,
+                    allowKeychainPrompt: allowKeychainPrompt,
+                    logger: logger)
+            },
+            log: log)
+        {
+            return session
         }
 
         if allowCachedSessions {
             let storedCookies = await CursorSessionStore.shared.getCookies()
             if !storedCookies.isEmpty {
                 log("Using stored session cookies")
-                let cookieHeader = storedCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+                let header = CursorCookieHeader.make(from: storedCookies)
                 do {
                     return try await validateCookieHeader(
-                        cookieHeader,
+                        header,
                         sourceLabel: "stored session",
                         accountId: accountId,
                         cookies: storedCookies)
@@ -131,10 +129,13 @@ struct CursorStatusProbe: Sendable {
             }
         }
 
-        let safariBlocked = report.safariReadFailed
+        let chromeSkipped = browsers.contains { browser in
+            browser.usesKeychainForCookieDecryption
+                && !BrowserCookieAccessGate.shouldAttempt(browser, allowKeychainPrompt: allowKeychainPrompt)
+        }
         throw CursorProbeError.noSessionCookie(details: report.failureMessage(
             apiRejected: report.apiRejectedSources,
-            safariBlocked: safariBlocked && allowKeychainPrompt))
+            chromeSkipped: chromeSkipped))
     }
 
     private func scanBrowsers(
@@ -147,9 +148,7 @@ struct CursorStatusProbe: Sendable {
         for browser in browsers {
             let sessions = importSessions(browser)
             if sessions.isEmpty {
-                if browser == .safari {
-                    report.safariHadNoCookies = true
-                }
+                if browser == .safari { report.safariHadNoCookies = true }
                 continue
             }
 
@@ -179,59 +178,70 @@ struct CursorStatusProbe: Sendable {
         accountId: UUID,
         cookies: [HTTPCookie]
     ) async throws -> CursorValidatedSession {
-        _ = try await fetchUsageSummary(cookieHeader: cookieHeader)
-        let userInfo = try? await fetchUserInfo(cookieHeader: cookieHeader)
-        CookieHeaderCache.store(accountId: accountId, cookieHeader: cookieHeader, sourceLabel: sourceLabel)
+        let header = CursorCookieHeader.make(from: cookieHeader)
+        let userInfo = try await validateWithCursorAPI(cookieHeader: header)
+        CookieHeaderCache.store(accountId: accountId, cookieHeader: header, sourceLabel: sourceLabel)
         if !cookies.isEmpty {
             await CursorSessionStore.shared.setCookies(cookies)
         }
 
         let name = userInfo?.name ?? userInfo?.email
-        let email = userInfo?.email
         return CursorValidatedSession(
-            cookieHeader: cookieHeader,
+            cookieHeader: header,
             sourceLabel: sourceLabel,
-            accountInfo: CursorAccountInfo(name: name ?? sourceLabel, email: email),
+            accountInfo: CursorAccountInfo(name: name ?? sourceLabel, email: userInfo?.email),
             cookies: cookies)
     }
 
+    /// CodexBar uses usage-summary; accept auth/me when usage-summary is unavailable but session is valid.
+    private func validateWithCursorAPI(cookieHeader: String) async throws -> CursorUserInfo? {
+        do {
+            _ = try await fetchUsageSummary(cookieHeader: cookieHeader)
+            return try? await fetchUserInfo(cookieHeader: cookieHeader)
+        } catch let error as CursorProbeError where error == .notLoggedIn {
+            throw error
+        } catch {
+            return try await fetchUserInfo(cookieHeader: cookieHeader)
+        }
+    }
+
     private func fetchUsageSummary(cookieHeader: String) async throws {
+        let bases = [baseURL, URL(string: "https://www.cursor.com")!]
         var lastStatus: Int?
-        for baseURL in baseURLs {
-            let url = baseURL.appendingPathComponent("/api/usage-summary")
-            var request = URLRequest(url: url)
+        for base in bases {
+            var request = URLRequest(url: base.appendingPathComponent("/api/usage-summary"))
             request.timeoutInterval = timeout
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-            request.setValue(baseURL.absoluteString, forHTTPHeaderField: "Origin")
+            request.setValue(base.absoluteString, forHTTPHeaderField: "Origin")
+            request.setValue("\(base.absoluteString)/settings", forHTTPHeaderField: "Referer")
 
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { continue }
             lastStatus = http.statusCode
-            if http.statusCode == 401 || http.statusCode == 403 {
-                throw CursorProbeError.notLoggedIn
-            }
+            if http.statusCode == 401 || http.statusCode == 403 { throw CursorProbeError.notLoggedIn }
             if http.statusCode == 200 { return }
         }
-        if lastStatus != nil {
-            throw CursorProbeError.networkError("HTTP \(lastStatus!)")
-        }
+        if let lastStatus { throw CursorProbeError.networkError("usage-summary HTTP \(lastStatus)") }
         throw CursorProbeError.networkError("Could not reach Cursor")
     }
 
     private func fetchUserInfo(cookieHeader: String) async throws -> CursorUserInfo {
-        for baseURL in baseURLs {
-            let url = baseURL.appendingPathComponent("/api/auth/me")
-            var request = URLRequest(url: url)
+        let bases = [baseURL, URL(string: "https://www.cursor.com")!]
+        for base in bases {
+            var request = URLRequest(url: base.appendingPathComponent("/api/auth/me"))
             request.timeoutInterval = timeout
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            request.setValue(base.absoluteString, forHTTPHeaderField: "Origin")
 
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { continue }
+            guard let http = response as? HTTPURLResponse else { continue }
+            if http.statusCode == 401 || http.statusCode == 403 { throw CursorProbeError.notLoggedIn }
+            guard http.statusCode == 200 else { continue }
             return try JSONDecoder().decode(CursorUserInfo.self, from: data)
         }
-        throw CursorProbeError.networkError("Failed to fetch user info")
+        throw CursorProbeError.networkError("auth/me failed")
     }
 }
 
@@ -240,28 +250,28 @@ private struct CursorImportReport {
     var foundSources: [String] = []
     var apiRejectedSources: [String] = []
     var safariHadNoCookies = false
-    var safariReadFailed = false
 
-    func failureMessage(apiRejected: [String], safariBlocked: Bool) -> String {
+    func failureMessage(apiRejected: [String], chromeSkipped: Bool) -> String {
         var lines: [String] = []
 
         if !apiRejected.isEmpty {
-            lines.append("Found cookies but Cursor rejected them (stale or wrong profile): \(apiRejected.joined(separator: ", ")).")
-            lines.append("Sign out of cursor.com in your browser, sign in again, then Import.")
-        } else if foundSources.isEmpty {
-            lines.append("No Cursor session cookies found.")
-            lines.append("Sign in at https://cursor.com in Safari or Chrome, then tap Import from browsers.")
+            lines.append("Found cookies but Cursor rejected them: \(apiRejected.joined(separator: ", ")).")
+            lines.append("Sign out at cursor.com, sign in again, then tap Import from browsers.")
+        } else {
+            lines.append("No valid Cursor session found.")
+            lines.append("1. Sign in at https://cursor.com in Safari or Chrome (same browser you import from).")
+            lines.append("2. Tap Import from browsers — allow Keychain if macOS asks for Chrome Safe Storage.")
         }
 
-        if safariBlocked || safariHadNoCookies {
+        if safariHadNoCookies {
             lines.append("")
-            lines.append("Safari: enable Full Disk Access for this exact app, then quit and reopen Usageview:")
+            lines.append("Safari: turn on Full Disk Access for this app, quit & reopen Usageview:")
             lines.append(CursorCookieImporter.runningAppPathForPrivacySettings)
         }
 
-        if scannedBrowsers.isEmpty {
-            lines.append("Chrome was skipped (Keychain). Tap Import again and click Always Allow if macOS asks for Chrome Safe Storage.")
-        } else {
+        if chromeSkipped {
+            lines.append("Chrome was skipped. Tap Import again and click Always Allow on the Keychain prompt.")
+        } else if !scannedBrowsers.isEmpty {
             lines.append("Checked: \(scannedBrowsers.joined(separator: ", ")).")
         }
 
@@ -272,14 +282,10 @@ private struct CursorImportReport {
 extension CursorProbeError: Equatable {
     static func == (lhs: CursorProbeError, rhs: CursorProbeError) -> Bool {
         switch (lhs, rhs) {
-        case (.notLoggedIn, .notLoggedIn):
-            return true
-        case let (.networkError(a), .networkError(b)):
-            return a == b
-        case let (.noSessionCookie(a), .noSessionCookie(b)):
-            return a == b
-        default:
-            return false
+        case (.notLoggedIn, .notLoggedIn): return true
+        case let (.networkError(a), .networkError(b)): return a == b
+        case let (.noSessionCookie(a), .noSessionCookie(b)): return a == b
+        default: return false
         }
     }
 }

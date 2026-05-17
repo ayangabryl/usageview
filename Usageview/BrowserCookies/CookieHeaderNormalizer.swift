@@ -30,6 +30,32 @@ enum CookieHeaderNormalizer {
         return value.isEmpty ? nil : value
     }
 
+    static func pairs(from raw: String) -> [(name: String, value: String)] {
+        guard let normalized = normalize(raw) else { return [] }
+        var results: [(name: String, value: String)] = []
+        results.reserveCapacity(6)
+
+        for part in normalized.split(separator: ";") {
+            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  let equalsIndex = trimmed.firstIndex(of: "=")
+            else { continue }
+            let name = trimmed[..<equalsIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = trimmed[trimmed.index(after: equalsIndex)...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { continue }
+            results.append((name: String(name), value: String(value)))
+        }
+
+        return results
+    }
+
+    static func filteredHeader(from raw: String?, allowedNames: Set<String>) -> String? {
+        let filtered = pairs(from: raw ?? "").filter { allowedNames.contains($0.name) }
+        guard !filtered.isEmpty else { return nil }
+        return filtered.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+    }
+
     private static func extractHeader(from raw: String) -> String? {
         for pattern in headerPatterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }

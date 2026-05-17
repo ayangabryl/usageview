@@ -2719,6 +2719,13 @@ struct CursorInlineConnectView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
+            Text(CursorCookieImporter.runningAppPathForPrivacySettings)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .textSelection(.enabled)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+
             if let loginStatus {
                 Text(loginStatus)
                     .font(.caption2)

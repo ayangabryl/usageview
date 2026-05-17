@@ -30,16 +30,6 @@ enum CursorCookieImportError: LocalizedError {
 enum CursorCookieImporter {
     private static let cookieClient = BrowserCookieClient()
     private static let detection = BrowserDetection.shared
-    private static let sessionCookieNames: Set<String> = [
-        "WorkosCursorSessionToken",
-        "__Secure-next-auth.session-token",
-        "next-auth.session-token",
-        "wos-session",
-        "__Secure-wos-session",
-        "authjs.session-token",
-        "__Secure-authjs.session-token",
-    ]
-
     private static let cookieDomains = [
         "cursor.com",
         "www.cursor.com",
@@ -52,7 +42,7 @@ enum CursorCookieImporter {
         let sourceLabel: String
 
         var cookieHeader: String {
-            cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            CursorCookieHeader.make(from: cookies)
         }
     }
 
@@ -115,7 +105,7 @@ enum CursorCookieImporter {
                 log("\(source.label): [\(names)]")
 
                 let httpCookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
-                let hasNamedSession = httpCookies.contains { sessionCookieNames.contains($0.name) }
+                let hasNamedSession = httpCookies.contains { CursorCookieHeader.sessionCookieNames.contains($0.name) }
                 if hasNamedSession, requireKnownSessionName {
                     log("Found \(httpCookies.count) Cursor cookies in \(source.label)")
                     sessions.append(SessionInfo(cookies: httpCookies, sourceLabel: source.label))

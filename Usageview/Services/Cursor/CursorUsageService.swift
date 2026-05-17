@@ -93,7 +93,8 @@ final class CursorUsageService: Sendable {
         accountId: UUID,
         persistSession: Bool
     ) async -> CursorUsageData? {
-        let normalized = CookieHeaderNormalizer.normalize(cookieHeader) ?? cookieHeader
+        let normalized = CursorCookieHeader.make(
+            from: CookieHeaderNormalizer.normalize(cookieHeader) ?? cookieHeader)
 
         do {
             let result = try await fetchWithCookieHeader(normalized, accountId: accountId)
