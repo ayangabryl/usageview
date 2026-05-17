@@ -79,6 +79,8 @@ final class AccountStore {
     let kiroAuth: KiroAuthService
     let augmentAuth: AugmentAuthService
     let jetbrainsAuth: JetBrainsAuthService
+    let codexAuth: CodexAuthService
+    let zaiAuth: ZaiAuthService
     private let githubUsage: GitHubUsageService
     private let claudeUsage: AnthropicUsageService
     private let openaiUsage: OpenAIUsageService
@@ -89,6 +91,8 @@ final class AccountStore {
     private let kiroUsage: KiroUsageService
     private let augmentUsage: AugmentUsageService
     private let jetbrainsUsage: JetBrainsUsageService
+    private let codexUsage: CodexUsageService
+    private let zaiUsage: ZaiUsageService
     private let storageKey = "accounts_data_v3"
 
     init() {
@@ -102,6 +106,8 @@ final class AccountStore {
         let kr = KiroAuthService()
         let au = AugmentAuthService()
         let jb = JetBrainsAuthService()
+        let cx = CodexAuthService()
+        let za = ZaiAuthService()
         self.githubAuth = gh
         self.claudeAuth = cl
         self.openaiAuth = oa
@@ -112,6 +118,8 @@ final class AccountStore {
         self.kiroAuth = kr
         self.augmentAuth = au
         self.jetbrainsAuth = jb
+        self.codexAuth = cx
+        self.zaiAuth = za
         self.githubUsage = GitHubUsageService(authService: gh)
         self.claudeUsage = AnthropicUsageService(authService: cl)
         self.openaiUsage = OpenAIUsageService(authService: oa)
@@ -122,6 +130,8 @@ final class AccountStore {
         self.kiroUsage = KiroUsageService(authService: kr)
         self.augmentUsage = AugmentUsageService(authService: au)
         self.jetbrainsUsage = JetBrainsUsageService(authService: jb)
+        self.codexUsage = CodexUsageService(authService: cx)
+        self.zaiUsage = ZaiUsageService(authService: za)
         if let mode = UserDefaults.standard.string(forKey: "viewMode"),
            let m = ViewMode(rawValue: mode) {
             viewMode = m
@@ -194,6 +204,8 @@ final class AccountStore {
         case .kiro: kiroAuth.disconnect(accountId: id)
         case .augment: augmentAuth.disconnect(accountId: id)
         case .jetbrainsAI: jetbrainsAuth.disconnect(accountId: id)
+        case .codex: codexAuth.disconnect(accountId: id)
+        case .zai: zaiAuth.disconnect(accountId: id)
         }
         accounts.removeAll { $0.id == id }
         accountOrder.removeAll { $0 == id }
@@ -214,6 +226,8 @@ final class AccountStore {
         case .kiro: kiroAuth.disconnect(accountId: id)
         case .augment: augmentAuth.disconnect(accountId: id)
         case .jetbrainsAI: jetbrainsAuth.disconnect(accountId: id)
+        case .codex: codexAuth.disconnect(accountId: id)
+        case .zai: zaiAuth.disconnect(accountId: id)
         }
         if let index = accounts.firstIndex(where: { $0.id == id }) {
             accounts[index].username = nil
@@ -252,6 +266,7 @@ final class AccountStore {
             || kimiAuth.getAPIKey(for: accountId) == key
             || kiroAuth.getAPIKey(for: accountId) == key
             || augmentAuth.getAPIKey(for: accountId) == key
+            || zaiAuth.getAPIKey(for: accountId) == key
     }
 
     /// Briefly show a green checkmark, then sweep the gauge from 0 → actual%.
@@ -681,6 +696,56 @@ final class AccountStore {
                     save()
                 }
             }
+
+        case .codex:
+            if let usage = await codexUsage.fetchUsage(for: account.id) {
+                if let index = accounts.firstIndex(where: { $0.id == account.id }) {
+                    accounts[index].planName = usage.planName.capitalized
+                    if let fiveHour = usage.fiveHourUsedPercent {
+                        accounts[index].fiveHourUsage = Double(fiveHour)
+                        accounts[index].fiveHourResetDate = usage.fiveHourResetAt
+                        accounts[index].currentUsage = Double(fiveHour)
+                        accounts[index].usageLimit = 100
+                        accounts[index].usageUnit = "% used"
+                        if let reset = usage.fiveHourResetAt {
+                            accounts[index].resetDate = reset
+                        }
+                    }
+                    if let weekly = usage.weeklyUsedPercent {
+                        accounts[index].sevenDayUsage = Double(weekly)
+                        accounts[index].sevenDayResetDate = usage.weeklyResetAt
+                    }
+                    accounts[index].openAICreditsBalance = usage.creditsBalance
+                    accounts[index].openAICreditsUnlimited = usage.creditsUnlimited
+                    save()
+                }
+            }
+
+        case .zai:
+            if let usage = await zaiUsage.fetchUsage(for: account.id) {
+                if let index = accounts.firstIndex(where: { $0.id == account.id }) {
+                    accounts[index].planName = usage.planName
+                    if let token = usage.tokenUsedPercent {
+                        accounts[index].fiveHourUsage = token
+                        accounts[index].fiveHourResetDate = usage.tokenResetAt
+                    }
+                    if let mcp = usage.mcpUsedPercent {
+                        accounts[index].sevenDayUsage = mcp
+                        accounts[index].sevenDayResetDate = usage.mcpResetAt
+                    }
+                    if let session = usage.sessionUsedPercent {
+                        accounts[index].tertiaryUsage = session
+                        accounts[index].tertiaryResetDate = usage.sessionResetAt
+                    }
+                    accounts[index].currentUsage = usage.primaryPercent
+                    accounts[index].usageLimit = 100
+                    accounts[index].usageUnit = "% used"
+                    if let reset = usage.tokenResetAt ?? usage.sessionResetAt ?? usage.mcpResetAt {
+                        accounts[index].resetDate = reset
+                    }
+                    save()
+                }
+            }
         }
     }
 
@@ -709,6 +774,8 @@ final class AccountStore {
         case .kiro: kiroAuth.isAuthenticated(for: account.id)
         case .augment: augmentAuth.isAuthenticated(for: account.id)
         case .jetbrainsAI: jetbrainsAuth.isAuthenticated(for: account.id)
+        case .codex: codexAuth.isAuthenticated(for: account.id)
+        case .zai: zaiAuth.isAuthenticated(for: account.id)
         }
     }
 

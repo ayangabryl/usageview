@@ -20,6 +20,8 @@ struct Account: Codable, Identifiable, Sendable {
     var fiveHourResetDate: Date?
     var sevenDayUsage: Double?
     var sevenDayResetDate: Date?
+    var tertiaryUsage: Double?
+    var tertiaryResetDate: Date?
 
     // Copilot chat quota (secondary)
     var chatUsage: Double?
@@ -91,6 +93,8 @@ struct Account: Codable, Identifiable, Sendable {
         fiveHourResetDate = try container.decodeIfPresent(Date.self, forKey: .fiveHourResetDate)
         sevenDayUsage = try container.decodeIfPresent(Double.self, forKey: .sevenDayUsage)
         sevenDayResetDate = try container.decodeIfPresent(Date.self, forKey: .sevenDayResetDate)
+        tertiaryUsage = try container.decodeIfPresent(Double.self, forKey: .tertiaryUsage)
+        tertiaryResetDate = try container.decodeIfPresent(Date.self, forKey: .tertiaryResetDate)
         chatUsage = try container.decodeIfPresent(Double.self, forKey: .chatUsage)
         chatLimit = try container.decodeIfPresent(Double.self, forKey: .chatLimit)
         chatPercentRemaining = try container.decodeIfPresent(Double.self, forKey: .chatPercentRemaining)
@@ -132,11 +136,13 @@ struct Account: Codable, Identifiable, Sendable {
         case (.gemini, .oauth): return !hasGeminiQuota  // OAuth shows real quota when available
         case (.gemini, .apiKey): return true
         case (.claude, .apiKey), (.chatgpt, .apiKey): return true
-        case (.chatgpt, .oauth): return !hasChatGPTUsage  // Show usage when /wham/usage data is available
-        case (.kimi, _): return !hasKimiBilling  // Status-only until billing data loads
+        case (.chatgpt, .oauth): return !hasChatGPTUsage
+        case (.codex, _): return !hasCodexUsage
+        case (.zai, _): return !hasZaiQuota
+        case (.kimi, _): return !hasKimiBilling
         case (.cursor, _): return !hasCursorUsage
         case (.openrouter, _): return !hasOpenRouterCredits
-        case (.kiro, _): return true  // Status-only for now (CLI-based)
+        case (.kiro, _): return !hasKiroQuota
         case (.augment, _): return true  // Status-only for now
         case (.jetbrainsAI, _): return !hasJetBrainsQuota
         default: return false
@@ -153,9 +159,21 @@ struct Account: Codable, Identifiable, Sendable {
         return currentUsage >= usageLimit
     }
 
-    /// Whether this is a Claude, ChatGPT, or Gemini OAuth account with dual rate windows
+    /// Claude / ChatGPT / Gemini OAuth / Codex with session + weekly (or Pro + Flash) windows
     var hasDualWindows: Bool {
-        (serviceType == .claude || serviceType == .chatgpt || serviceType == .gemini) && authMethod == .oauth && fiveHourUsage != nil && sevenDayUsage != nil
+        switch serviceType {
+        case .codex:
+            return hasCodexUsage && sevenDayUsage != nil
+        case .claude, .chatgpt, .gemini:
+            return authMethod == .oauth && fiveHourUsage != nil && sevenDayUsage != nil
+        default:
+            return false
+        }
+    }
+
+    /// Z.ai: token + MCP (+ optional short session) lanes
+    var hasZaiTripleWindows: Bool {
+        serviceType == .zai && fiveHourUsage != nil && (sevenDayUsage != nil || tertiaryUsage != nil)
     }
 
     /// Whether this Copilot account has both premium and chat quotas
@@ -171,6 +189,18 @@ struct Account: Codable, Identifiable, Sendable {
     /// Whether this ChatGPT account has real usage data from /wham/usage
     var hasChatGPTUsage: Bool {
         serviceType == .chatgpt && authMethod == .oauth && fiveHourUsage != nil
+    }
+
+    var hasCodexUsage: Bool {
+        serviceType == .codex && fiveHourUsage != nil
+    }
+
+    var hasZaiQuota: Bool {
+        serviceType == .zai && fiveHourUsage != nil
+    }
+
+    var hasKiroQuota: Bool {
+        serviceType == .kiro && usageLimit > 0
     }
 
     /// Whether this Cursor account has usage data

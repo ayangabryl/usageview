@@ -30,6 +30,8 @@ struct MenuBarContentView: View {
         case connectKiro(UUID)
         case connectAugment(UUID)
         case connectJetBrains(UUID)
+        case connectCodex(UUID)
+        case connectZai(UUID)
         case accountDetail(UUID)
     }
 
@@ -73,6 +75,10 @@ struct MenuBarContentView: View {
                 augmentConnectView(accountId: id)
             case .connectJetBrains(let id):
                 jetbrainsConnectView(accountId: id)
+            case .connectCodex(let id):
+                codexConnectView(accountId: id)
+            case .connectZai(let id):
+                zaiConnectView(accountId: id)
             case .accountDetail(let id):
                 accountDetailView(accountId: id)
             }
@@ -220,6 +226,8 @@ struct MenuBarContentView: View {
                     case .kiro: navigate(to: .connectKiro(account.id))
                     case .augment: navigate(to: .connectAugment(account.id))
                     case .jetbrainsAI: navigate(to: .connectJetBrains(account.id))
+                    case .codex: navigate(to: .connectCodex(account.id))
+                    case .zai: navigate(to: .connectZai(account.id))
                     }
                 },
                 onRefresh: { Task { await store.refreshAccount(account) } },
@@ -260,6 +268,8 @@ struct MenuBarContentView: View {
                     case .kiro: navigate(to: .connectKiro(account.id))
                     case .augment: navigate(to: .connectAugment(account.id))
                     case .jetbrainsAI: navigate(to: .connectJetBrains(account.id))
+                    case .codex: navigate(to: .connectCodex(account.id))
+                    case .zai: navigate(to: .connectZai(account.id))
                     }
                 },
                 onRefresh: { Task { await store.refreshAccount(account) } },
@@ -312,7 +322,10 @@ struct MenuBarContentView: View {
                             let account = store.addAccount(serviceType: type)
                             navigate(to: .pickAuthMethod(account.id, type))
                         } else {
-                            let account = store.addAccount(serviceType: type, authMethod: type == .copilot ? .oauth : .apiKey)
+                            let account = store.addAccount(
+                                serviceType: type,
+                                authMethod: (type == .copilot || type == .codex) ? .oauth : .apiKey
+                            )
                             switch type {
                             case .copilot: navigate(to: .connectGitHub(account.id))
                             case .kimi: navigate(to: .connectKimi(account.id))
@@ -321,6 +334,8 @@ struct MenuBarContentView: View {
                             case .kiro: navigate(to: .connectKiro(account.id))
                             case .augment: navigate(to: .connectAugment(account.id))
                             case .jetbrainsAI: navigate(to: .connectJetBrains(account.id))
+                            case .codex: navigate(to: .connectCodex(account.id))
+                            case .zai: navigate(to: .connectZai(account.id))
                             case .claude, .chatgpt, .gemini: break // handled above
                             }
                         }
@@ -792,6 +807,56 @@ struct MenuBarContentView: View {
         )
     }
 
+    private func codexConnectView(accountId: UUID) -> some View {
+        CodexInlineConnectView(
+            authService: store.codexAuth,
+            accountId: accountId,
+            onDone: { info in
+                if let info {
+                    store.updateAccountAfterConnect(
+                        id: accountId,
+                        username: info.name,
+                        avatarURL: nil
+                    )
+                    Task {
+                        if let account = store.accounts.first(where: { $0.id == accountId }) {
+                            await store.refreshAccount(account)
+                        }
+                    }
+                    goHome()
+                } else {
+                    store.removeAccount(id: accountId)
+                    goBack()
+                }
+            }
+        )
+    }
+
+    private func zaiConnectView(accountId: UUID) -> some View {
+        ZaiInlineConnectView(
+            authService: store.zaiAuth,
+            accountId: accountId,
+            onDone: { info in
+                if let info {
+                    store.updateAccountAfterConnect(
+                        id: accountId,
+                        username: info.name,
+                        avatarURL: nil
+                    )
+                    Task {
+                        if let account = store.accounts.first(where: { $0.id == accountId }) {
+                            await store.refreshAccount(account)
+                        }
+                    }
+                    goHome()
+                } else {
+                    store.removeAccount(id: accountId)
+                    goBack()
+                }
+            }
+        )
+    }
+
     // MARK: - Nav Header Helper
 
     private func navHeader(title: String, onBack: @escaping () -> Void) -> some View {
@@ -935,6 +1000,67 @@ struct MenuBarContentView: View {
                                     .toggleStyle(.switch)
                                     .controlSize(.mini)
                                     .padding(.top, 4)
+
+                                } else if account.hasDualWindows {
+                                    detailRateRow(
+                                        label: "\(account.serviceType.primaryRateLabel(authMethod: account.authMethod)) limit",
+                                        usage: account.fiveHourUsage ?? account.currentUsage,
+                                        subtitle: nil,
+                                        resetDate: account.fiveHourResetDate,
+                                        accentColor: account.accentColor,
+                                        maxResetHours: account.serviceType == .gemini ? 25 : 6
+                                    )
+                                    detailRateRow(
+                                        label: "\(account.serviceType.secondaryRateLabel(authMethod: account.authMethod)) limit",
+                                        usage: account.sevenDayUsage ?? 0,
+                                        subtitle: nil,
+                                        resetDate: account.sevenDayResetDate,
+                                        accentColor: account.accentColor,
+                                        maxResetHours: 192
+                                    )
+                                    Toggle(isOn: Binding(
+                                        get: { store.showWeeklyLimit },
+                                        set: { newValue in
+                                            store.showWeeklyLimit = newValue
+                                            UserDefaults.standard.set(newValue, forKey: "showWeeklyLimit")
+                                        }
+                                    )) {
+                                        Text("Show weekly limit in main view")
+                                            .font(.caption)
+                                    }
+                                    .toggleStyle(.switch)
+                                    .controlSize(.mini)
+                                    .padding(.top, 4)
+
+                                } else if account.hasZaiTripleWindows {
+                                    detailRateRow(
+                                        label: "Token quota",
+                                        usage: account.fiveHourUsage ?? 0,
+                                        subtitle: nil,
+                                        resetDate: account.fiveHourResetDate,
+                                        accentColor: account.accentColor,
+                                        maxResetHours: 24 * 14
+                                    )
+                                    if let mcp = account.sevenDayUsage {
+                                        detailRateRow(
+                                            label: "MCP quota",
+                                            usage: mcp,
+                                            subtitle: nil,
+                                            resetDate: account.sevenDayResetDate,
+                                            accentColor: account.accentColor,
+                                            maxResetHours: 24 * 35
+                                        )
+                                    }
+                                    if let session = account.tertiaryUsage {
+                                        detailRateRow(
+                                            label: "Short window",
+                                            usage: session,
+                                            subtitle: nil,
+                                            resetDate: account.tertiaryResetDate,
+                                            accentColor: account.accentColor,
+                                            maxResetHours: 6
+                                        )
+                                    }
 
                                 } else if account.serviceType == .copilot {
                                     // Copilot: premium requests + chat quota
@@ -1387,13 +1513,19 @@ struct MenuBarContentView: View {
             return "Augment authentication probe"
         case (.jetbrainsAI, _):
             return "JetBrains local quota source"
+        case (.codex, _):
+            return "Codex CLI OAuth · chatgpt.com/wham/usage"
+        case (.zai, _):
+            return "Z.ai quota API (api.z.ai / open.bigmodel.cn)"
         }
     }
 
     private func usageCycleLabel(for account: Account) -> String {
         switch account.serviceType {
-        case .claude, .chatgpt:
-            return "5-hour and 7-day rolling windows"
+        case .claude, .chatgpt, .codex:
+            return "5-hour and weekly rolling windows"
+        case .zai:
+            return "Token, MCP, and short-window quotas"
         case .copilot, .cursor:
             return "Monthly billing cycle"
         case .openrouter:
@@ -2978,6 +3110,182 @@ struct JetBrainsInlineConnectView: View {
             Text("Connect JetBrains AI")
                 .font(.headline)
 
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 4)
+    }
+}
+
+// MARK: - Codex Inline Connect (CLI)
+
+struct CodexInlineConnectView: View {
+    let authService: CodexAuthService
+    let accountId: UUID
+    let onDone: (CodexAccountInfo?) -> Void
+    @State private var isConnecting = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 16) {
+            navHeader
+
+            ServiceIconView(serviceType: .codex, avatarURL: nil, size: 48)
+
+            Text("Sign in with Codex CLI first (`codex` in Terminal), then import your session here for 5-hour and weekly usage.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 16)
+                    .multilineTextAlignment(.center)
+            }
+
+            Button {
+                isConnecting = true
+                errorMessage = nil
+                do {
+                    let info = try authService.connectFromCLI(for: accountId)
+                    onDone(info)
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+                isConnecting = false
+            } label: {
+                HStack(spacing: 6) {
+                    if isConnecting {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(isConnecting ? "Reading ~/.codex/auth.json…" : "Import from Codex CLI")
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(ServiceType.codex.accentColor)
+            .disabled(isConnecting)
+            .padding(.horizontal, 16)
+
+            Link(destination: URL(string: "https://chatgpt.com/codex/settings/usage")!) {
+                Text("Open Codex usage dashboard →")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
+
+            Spacer().frame(height: 4)
+        }
+        .padding(.bottom, 12)
+    }
+
+    private var navHeader: some View {
+        HStack(spacing: 8) {
+            Button { onDone(nil) } label: {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.medium))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Text("Connect Codex")
+                .font(.headline)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 4)
+    }
+}
+
+// MARK: - Z.ai / GLM Inline Connect
+
+struct ZaiInlineConnectView: View {
+    let authService: ZaiAuthService
+    let accountId: UUID
+    let onDone: (ZaiAccountInfo?) -> Void
+    @State private var apiKey: String = ""
+    @State private var region: ZaiAPIRegion = .global
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 16) {
+            navHeader
+
+            ServiceIconView(serviceType: .zai, avatarURL: nil, size: 48)
+
+            Text("Enter your Z.ai / GLM API key. Usage shows token, MCP, and short-window quotas from the BigModel API.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+
+            Picker("API region", selection: $region) {
+                ForEach(ZaiAPIRegion.allCases, id: \.self) { r in
+                    Text(r.displayName).tag(r)
+                }
+            }
+            .pickerStyle(.menu)
+            .padding(.horizontal, 16)
+
+            VStack(alignment: .leading, spacing: 4) {
+                SecureField("API key…", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(.horizontal, 16)
+
+            Button {
+                let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    errorMessage = "Please enter an API key."
+                    return
+                }
+                let info = authService.saveAPIKey(trimmed, for: accountId, region: region)
+                onDone(info)
+            } label: {
+                Text("Connect")
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(ServiceType.zai.accentColor)
+            .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .padding(.horizontal, 16)
+
+            Link(destination: URL(string: "https://z.ai/manage-apikey")!) {
+                Text("Get an API key →")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
+
+            Spacer().frame(height: 4)
+        }
+        .padding(.bottom, 12)
+    }
+
+    private var navHeader: some View {
+        HStack(spacing: 8) {
+            Button { onDone(nil) } label: {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.medium))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Text("Connect Z.ai")
+                .font(.headline)
             Spacer()
         }
         .padding(.horizontal, 16)

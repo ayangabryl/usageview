@@ -65,6 +65,34 @@ enum DemoDataService {
                 sevenDayResetDate: now.addingTimeInterval(60 * 60 * 24 * 6)
             )
 
+        case .codex:
+            return DemoSnapshot(
+                username: "demo@example.com",
+                planName: "Pro",
+                currentUsage: 41.0,
+                usageLimit: 100,
+                usageUnit: "% used",
+                resetDate: now.addingTimeInterval(60 * 60 * 4),
+                fiveHourUsage: 41.0,
+                fiveHourResetDate: now.addingTimeInterval(60 * 60 * 4),
+                sevenDayUsage: 62.0,
+                sevenDayResetDate: now.addingTimeInterval(60 * 60 * 24 * 5)
+            )
+
+        case .zai:
+            return DemoSnapshot(
+                username: "demo@z.ai",
+                planName: "GLM Coding Plan",
+                currentUsage: 55.0,
+                usageLimit: 100,
+                usageUnit: "% used",
+                resetDate: now.addingTimeInterval(60 * 60 * 24 * 2),
+                fiveHourUsage: 48.0,
+                fiveHourResetDate: now.addingTimeInterval(60 * 60 * 24 * 2),
+                sevenDayUsage: 22.0,
+                sevenDayResetDate: now.addingTimeInterval(60 * 60 * 24 * 28)
+            )
+
         case .gemini:
             return DemoSnapshot(
                 username: "demo@example.com",

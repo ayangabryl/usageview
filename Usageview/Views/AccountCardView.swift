@@ -143,13 +143,13 @@ struct AccountCardView: View {
                         }
 
                         claudeRateRow(
-                            label: account.serviceType == .gemini ? "Pro" : "5h",
+                            label: account.serviceType.primaryRateLabel(authMethod: account.authMethod),
                             usage: account.fiveHourUsage ?? 0,
                             resetDate: account.fiveHourResetDate
                         )
 
                         claudeRateRow(
-                            label: account.serviceType == .gemini ? "Flash" : "7d",
+                            label: account.serviceType.secondaryRateLabel(authMethod: account.authMethod),
                             usage: account.sevenDayUsage ?? 0,
                             resetDate: account.sevenDayResetDate
                         )
@@ -191,6 +191,33 @@ struct AccountCardView: View {
                                     .foregroundStyle(.tertiary)
                             }
                         }
+                    }
+                } else if account.hasZaiTripleWindows {
+                    if isRefreshing {
+                        HStack {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Spacer()
+                        }
+                    }
+                    claudeRateRow(
+                        label: "Tokens",
+                        usage: account.fiveHourUsage ?? 0,
+                        resetDate: account.fiveHourResetDate
+                    )
+                    if let mcp = account.sevenDayUsage {
+                        claudeRateRow(
+                            label: "MCP",
+                            usage: mcp,
+                            resetDate: account.sevenDayResetDate
+                        )
+                    }
+                    if let session = account.tertiaryUsage {
+                        claudeRateRow(
+                            label: account.serviceType.tertiaryRateLabel() ?? "5h",
+                            usage: session,
+                            resetDate: account.tertiaryResetDate
+                        )
                     }
                 } else if account.hasCopilotDualQuotas && showWeeklyLimit {
                     // Copilot: premium + chat quotas (shown when toggle is on)
@@ -422,11 +449,21 @@ struct ServiceIconView: View {
     }
 
     private var brandIcon: some View {
-        Image(serviceType.assetName)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: size, height: size)
-            .clipShape(Circle())
+        Group {
+            if let symbol = serviceType.symbolName {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.45, weight: .semibold))
+                    .foregroundStyle(serviceType.accentColor)
+                    .frame(width: size, height: size)
+                    .background(serviceType.accentColor.opacity(0.12), in: Circle())
+            } else {
+                Image(serviceType.assetName)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+            }
+        }
     }
 }
 

@@ -394,7 +394,7 @@ struct SettingsView: View {
                 settingsRow(
                     icon: "calendar.badge.clock",
                     title: "Show 7-day limit",
-                    subtitle: "Display Claude weekly window in the main account row"
+                    subtitle: "Show weekly/secondary quota in list rows (Claude 7d, ChatGPT, Codex, Gemini Flash)"
                 ) {
                     Toggle("", isOn: Binding(
                         get: { store.showWeeklyLimit },
