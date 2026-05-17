@@ -109,6 +109,33 @@ enum KeychainPromptFixer {
         return (fixed, keys.count)
     }
 
+    @MainActor
+    static func cleanupOrphanedKeychainEntries(activeAccountIds: Set<UUID>) -> Int {
+        let removed = KeychainHelper.cleanupOrphanedTokens(keepingAccountIds: activeAccountIds)
+        if removed > 0 {
+            KeychainHelper.warmSessionCache()
+        }
+        return removed
+    }
+
+    static func showOrphanCleanupResult(removed: Int) {
+        if removed == 0 {
+            presentAlert(
+                title: "Keychain looks in sync",
+                message: "Every saved token matches an account still in Usageview. No orphans were removed."
+            )
+        } else {
+            presentAlert(
+                title: "Removed \(removed) unused entries",
+                message: [
+                    "Deleted Keychain items for accounts you removed from Usageview earlier.",
+                    "",
+                    "You can also delete stragglers manually in Keychain Access (search com.ayangabryl.usage).",
+                ].joined(separator: "\n")
+            )
+        }
+    }
+
     static func showSavedAccountRepairResult(fixed: Int, total: Int) {
         if total == 0 {
             presentAlert(

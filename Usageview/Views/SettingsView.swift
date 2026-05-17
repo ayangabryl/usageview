@@ -229,10 +229,17 @@ struct SettingsView: View {
                 .controlSize(.regular)
             }
 
-            Button("Fix saved account prompts…") {
-                repairSavedAccountTokens()
+            HStack(spacing: 10) {
+                Button("Fix saved account prompts…") {
+                    repairSavedAccountTokens()
+                }
+                .controlSize(.regular)
+
+                Button("Clean unused Keychain entries") {
+                    cleanupOrphanedKeychainEntries()
+                }
+                .controlSize(.regular)
             }
-            .controlSize(.regular)
 
             if let keychainFixBannerMessage {
                 Text(keychainFixBannerMessage)
@@ -258,6 +265,16 @@ struct SettingsView: View {
         claudeKeychainStatusMessage = nil
         keychainFixBannerMessage = "CLI Keychain access is off. Popups from Usageview should stop."
         KeychainPromptFixer.showStopPopupsConfirmation()
+    }
+
+    private func cleanupOrphanedKeychainEntries() {
+        let removed = KeychainPromptFixer.cleanupOrphanedKeychainEntries(
+            activeAccountIds: Set(store.accounts.map(\.id))
+        )
+        KeychainPromptFixer.showOrphanCleanupResult(removed: removed)
+        if removed > 0 {
+            keychainFixBannerMessage = "Removed \(removed) unused Keychain item(s) from deleted accounts."
+        }
     }
 
     private func repairSavedAccountTokens() {

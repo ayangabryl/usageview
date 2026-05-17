@@ -142,6 +142,7 @@ final class AccountStore {
             accountOrder = orderStrings.compactMap { UUID(uuidString: $0) }
         }
         load()
+        KeychainMigration.cleanupOrphanedTokens(keepingAccountIds: Set(accounts.map(\.id)))
     }
 
     // MARK: - Persistence

@@ -29,6 +29,14 @@ enum KeychainMigration {
         KeychainHelper.warmSessionCache()
     }
 
+    /// Call after accounts are loaded from disk so deleted accounts do not leave Keychain clutter.
+    static func cleanupOrphanedTokens(keepingAccountIds activeIds: Set<UUID>) {
+        let removed = KeychainHelper.cleanupOrphanedTokens(keepingAccountIds: activeIds)
+        if removed > 0 {
+            migrationLog.info("Removed \(removed) orphaned Usageview keychain item(s)")
+        }
+    }
+
     private static func migrateAccount(_ account: String) -> Bool {
         guard let value = KeychainHelper.load(forKey: account) else { return false }
 

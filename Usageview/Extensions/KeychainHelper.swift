@@ -90,6 +90,24 @@ enum KeychainHelper {
         }
     }
 
+    /// Removes Keychain rows whose trailing UUID is not a current Usageview account (e.g. after delete).
+    @discardableResult
+    static func cleanupOrphanedTokens(keepingAccountIds activeIds: Set<UUID>) -> Int {
+        var removed = 0
+        for key in listUsageviewAccounts() {
+            guard let id = accountId(fromKeychainAccount: key) else { continue }
+            guard !activeIds.contains(id) else { continue }
+            remove(forKey: key)
+            removed += 1
+        }
+        return removed
+    }
+
+    static func accountId(fromKeychainAccount key: String) -> UUID? {
+        guard key.count >= 36 else { return nil }
+        return UUID(uuidString: String(key.suffix(36)))
+    }
+
     /// One-time interactive repair for items that still require a password / Allow dialog.
     @discardableResult
     static func repairSavedToken(forKey key: String) -> Bool {
