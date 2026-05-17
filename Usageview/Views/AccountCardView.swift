@@ -872,6 +872,12 @@ struct AccountMenuButton: View {
                               systemImage: isActiveCodexSession ? "checkmark.seal.fill" : "arrow.triangle.2.circlepath")
                     }
                     .disabled(isActiveCodexSession)
+                    // Always allow re-saving so the user can update a stale snapshot.
+                    if canCaptureCodexSession {
+                        Button { onCaptureCodexSession() } label: {
+                            Label("Re-save Codex Session", systemImage: "arrow.counterclockwise.circle")
+                        }
+                    }
                 } else if canCaptureCodexSession {
                     Button { onCaptureCodexSession() } label: {
                         Label("Save Codex Session for Switching", systemImage: "arrow.down.circle")

@@ -845,38 +845,110 @@ final class AccountStore {
     }
 
     // MARK: - OAuth session helpers
+    // OAuth (ChatGPT) accounts store their tokens in ~/.codex/auth.json — exactly
+    // the same file as CLI accounts, just with "auth_mode": "chatgpt".
+    // The sandbox blocks direct reads/writes, so we use a security-scoped bookmark
+    // obtained once via NSOpenPanel (user selects auth.json explicitly).
+
+    private static let codexAuthFileBookmarkKey = "CodexAuthFileBookmarkV1"
+
+    /// Expected location of auth.json so we can pre-navigate NSOpenPanel there.
+    private static var expectedAuthFileURL: URL {
+        CodexAuthService.realHomeDirectory().appendingPathComponent(".codex/auth.json")
+    }
+
+    /// Returns a security-scoped URL for ~/.codex/auth.json.
+    /// Uses a stored bookmark when available; otherwise shows NSOpenPanel once.
+    /// Returns nil if the user cancels.
+    @MainActor
+    func resolveCodexAuthFileWithPermission() -> URL? {
+        let key = Self.codexAuthFileBookmarkKey
+
+        // Try stored bookmark first.
+        if let data = UserDefaults.standard.data(forKey: key) {
+            var isStale = false
+            if let url = try? URL(resolvingBookmarkData: data,
+                                  options: .withSecurityScope,
+                                  relativeTo: nil,
+                                  bookmarkDataIsStale: &isStale),
+               !isStale {
+                return url
+            }
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+
+        // Prompt user once for explicit access.
+        let panel = NSOpenPanel()
+        panel.message = "Select your ~/.codex/auth.json file so Usageview can save and switch Codex accounts."
+        panel.prompt = "Grant Access"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        panel.allowedContentTypes = []
+        panel.nameFieldStringValue = "auth.json"
+        panel.directoryURL = Self.expectedAuthFileURL.deletingLastPathComponent()
+
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+
+        // Store bookmark for future use.
+        if let bookmarkData = try? url.bookmarkData(options: .withSecurityScope,
+                                                     includingResourceValuesForKeys: nil,
+                                                     relativeTo: nil) {
+            UserDefaults.standard.set(bookmarkData, forKey: key)
+        }
+        return url
+    }
 
     func hasSavedCodexOAuthSession(for account: Account) -> Bool {
         guard isCodexOAuth(account) else { return false }
-        return codexOAuth.hasSnapshot(for: account.id)
+        return codexAuth.hasSavedSession(for: account.id)
     }
 
-    /// Capture current Codex Desktop OAuth session for this account.
-    /// Prompts for folder access via NSOpenPanel if needed.
+    /// Capture the current Codex Desktop OAuth session for this account.
+    /// Prompts the user to select ~/.codex/auth.json on first run (stored bookmark after that).
     /// Returns a localized error string on failure, nil on success.
     func captureCodexOAuthSession(for account: Account) async -> String? {
         guard account.serviceType == .chatgpt else {
             return "This account is not a ChatGPT/OpenAI account."
         }
-        guard let grantedURL = await codexOAuth.resolveCodexFolderWithPermission() else {
-            return nil // user cancelled — not an error
+        guard let authFileURL = resolveCodexAuthFileWithPermission() else {
+            return nil  // user cancelled
         }
         do {
-            try codexOAuth.captureCurrentSession(for: account.id, from: grantedURL)
+            let info = try codexAuth.connectFromCLI(for: account.id, authFileURL: authFileURL)
+            if let index = accounts.firstIndex(where: { $0.id == account.id }) {
+                if let name = info.name { accounts[index].username = name }
+                save()
+            }
             return nil
         } catch {
-            return error.localizedDescription
+            // Invalidate the bookmark so the user can re-select the correct file next time.
+            UserDefaults.standard.removeObject(forKey: Self.codexAuthFileBookmarkKey)
+            return "Could not save Codex session: \(error.localizedDescription)\n\nMake sure Codex is logged in as this account, then try again."
         }
     }
 
     /// Switch Codex Desktop to the saved OAuth session for this account.
-    /// Quits Codex, swaps session files, relaunches. Returns error string on failure.
+    /// Writes ~/.codex/auth.json with the saved tokens and relaunches Codex.
+    /// Returns a localized error string on failure, nil on success.
     func activateCodexOAuthSession(for account: Account) async -> String? {
+        // Fail fast if Codex is still open — it won't re-read auth.json until restart.
+        let bundleIds = ["com.openai.chat", "com.openai.codex"]
+        let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+        if !running.isEmpty {
+            return "Codex is still open. Please quit Codex (⌘Q) first, then tap \"Switch to This in Codex\" again."
+        }
+        guard let authFileURL = resolveCodexAuthFileWithPermission() else {
+            return nil  // user cancelled
+        }
         do {
-            try await codexOAuth.activateSession(for: account.id)
+            _ = try codexAuth.activateSession(for: account.id, writingTo: authFileURL)
+            reopenCodexDesktopApp()
             Task { await refreshAccount(account) }
             return nil
         } catch {
+            UserDefaults.standard.removeObject(forKey: Self.codexAuthFileBookmarkKey)
             return error.localizedDescription
         }
     }
@@ -887,6 +959,7 @@ final class AccountStore {
 
     func isActiveSession(for account: Account) -> Bool {
         if isCodexManaged(account) { return isActiveCodexSession(for: account) }
+        if isCodexOAuth(account) { return codexAuth.isActiveSession(for: account.id) }
         return false
     }
 

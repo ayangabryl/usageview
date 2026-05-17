@@ -21,6 +21,9 @@ final class CodexAuthService: Sendable {
 
     /// Import from an explicit `auth.json` URL (obtained via NSOpenPanel security-scoped access).
     func connectFromCLI(for accountId: UUID, authFileURL: URL) throws -> CodexAccountInfo {
+        let accessing = authFileURL.startAccessingSecurityScopedResource()
+        defer { if accessing { authFileURL.stopAccessingSecurityScopedResource() } }
+
         let data = try Data(contentsOf: authFileURL)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CodexAuthError.invalidFormat
@@ -29,6 +32,37 @@ final class CodexAuthService: Sendable {
         let creds = try parseCredentials(from: json)
         let snapshot = CLIAuthSnapshot(credentials: creds, rawJSONString: rawString)
         return try saveSnapshot(snapshot, for: accountId)
+    }
+
+    /// Restore a saved session by writing auth.json to a security-scoped URL.
+    /// Used when the sandbox cannot write to the real path directly.
+    func activateSession(for accountId: UUID, writingTo authFileURL: URL) throws -> CodexAccountInfo {
+        guard let snapshotRaw = loadToken(key: authSnapshotKey(for: accountId)) else {
+            throw CodexAuthError.noSavedSession
+        }
+        guard let data = snapshotRaw.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw CodexAuthError.invalidSavedSession
+        }
+
+        let accessing = authFileURL.startAccessingSecurityScopedResource()
+        defer { if accessing { authFileURL.stopAccessingSecurityScopedResource() } }
+
+        let writeData = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+        let directory = authFileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try writeData.write(to: authFileURL, options: .atomic)
+
+        let creds = try parseCredentials(from: json)
+        saveToken(key: tokenKey(for: accountId), value: creds.accessToken)
+        if let accountIdString = creds.accountId {
+            saveToken(key: accountIdKey(for: accountId), value: accountIdString)
+        } else {
+            removeToken(key: accountIdKey(for: accountId))
+        }
+        let label = creds.accountId.map { "Codex · \($0.prefix(8))…" } ?? "Codex CLI"
+        return CodexAccountInfo(name: label)
     }
 
     private func saveSnapshot(_ snapshot: CLIAuthSnapshot, for accountId: UUID) throws -> CodexAccountInfo {
@@ -80,11 +114,17 @@ final class CodexAuthService: Sendable {
     }
 
     func isActiveSession(for accountId: UUID) -> Bool {
-        guard let savedToken = loadToken(key: tokenKey(for: accountId)),
-              let currentCreds = try? loadCLIAuth()
-        else {
-            return false
+        guard let currentCreds = try? loadCLIAuth() else { return false }
+
+        // Prefer stable account_id comparison (survives token refresh).
+        if let savedAccountId = loadToken(key: accountIdKey(for: accountId)),
+           !savedAccountId.isEmpty,
+           let currentAccountId = currentCreds.accountId {
+            return savedAccountId == currentAccountId
         }
+
+        // Fallback: compare raw access tokens (works for API-key accounts with no account_id).
+        guard let savedToken = loadToken(key: tokenKey(for: accountId)) else { return false }
         return savedToken == currentCreds.accessToken
     }
 

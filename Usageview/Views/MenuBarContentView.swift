@@ -94,7 +94,7 @@ struct MenuBarContentView: View {
                 if !isPresented { codexSwitchError = nil }
             }
         )) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) { codexSwitchError = nil }
         } message: {
             Text(codexSwitchError ?? "")
         }
@@ -366,9 +366,7 @@ struct MenuBarContentView: View {
 
     /// An OAuth account that is connected but has no session snapshot yet can be captured.
     private func canCaptureCodexSession(for account: Account) -> Bool {
-        store.isCodexOAuth(account)
-        && store.isConnected(for: account)
-        && !store.hasSavedCodexOAuthSession(for: account)
+        store.isCodexOAuth(account) && store.isConnected(for: account)
     }
 
     private func captureCodexSession(for account: Account) {

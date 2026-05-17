@@ -6,5 +6,7 @@
 	<string>https://raw.githubusercontent.com/ayangabryl/Usageview/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>azGOICjgKUQ5OBLYQvUDUyPJFNoBkMB9kakNbfKHqM4=</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Usageview needs to quit Codex before switching your saved session.</string>
 </dict>
 </plist>

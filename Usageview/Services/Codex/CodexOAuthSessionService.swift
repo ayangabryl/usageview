@@ -3,7 +3,8 @@ import AppKit
 import os
 
 private let logger = Logger(subsystem: "com.ayangabryl.usage", category: "CodexOAuth")
-private let bookmarkKey = "CodexOAuthFolderBookmark"
+// Key v3: points to the root Codex folder (captures Local Storage + Partitions).
+private let bookmarkKey = "CodexOAuthFolderBookmarkV3"
 
 /// Saves and restores Codex Desktop OAuth sessions per account.
 /// Codex Desktop is an Electron app — its session lives in:
@@ -16,20 +17,29 @@ final class CodexOAuthSessionService: Sendable {
 
     // MARK: - Session Files
 
-    /// Files/directories inside the Codex app support folder that hold OAuth state.
+    /// Items to snapshot from the root `~/Library/Application Support/Codex/` folder.
+    ///
+    /// The actual encrypted OAuth access token lives in **root-level `Local Storage/`**
+    /// (encrypted by the "Codex Safe Storage" macOS Keychain key, which is app-wide and
+    /// identical for every account on the same machine — so swapping the leveldb files works).
+    ///
+    /// The `Partitions/codex-browser-app/` sub-directory holds the Chromium session
+    /// cookies used by the embedded web view. Both layers are needed for a clean switch.
     private static let sessionItems = [
-        "Cookies",
+        "Local Storage",            // root-level — contains the encrypted access/refresh token
+        "Cookies",                  // root-level — Chromium cookie store
         "Cookies-journal",
-        "Local Storage",
-        "Session Storage",
         "DIPS",
-        "Preferences",
+        "DIPS-wal",
         "Local State",
         "Network Persistent State",
+        "Preferences",
+        "Partitions",               // entire partition tree (codex-browser-app session)
     ]
 
     // MARK: - Paths
 
+    /// Root app-support folder for Codex Desktop.
     static func codexAppSupportURL() -> URL {
         CodexAuthService.realHomeDirectory()
             .appendingPathComponent("Library/Application Support/Codex", isDirectory: true)
@@ -67,7 +77,7 @@ final class CodexOAuthSessionService: Sendable {
 
         // Show NSOpenPanel so the user explicitly grants sandbox access.
         let panel = NSOpenPanel()
-        panel.message = "Usageview needs access to the Codex session folder to save and restore your account sessions."
+        panel.message = "Select the \"Codex\" folder inside ~/Library/Application Support/. Usageview needs access to save and restore your account sessions."
         panel.prompt = "Grant Access"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -141,8 +151,8 @@ final class CodexOAuthSessionService: Sendable {
     }
 
     /// Switch to the saved session for `accountId`.
-    /// - Prompts for Codex folder access if no stored bookmark.
-    /// - Quits Codex Desktop (gracefully, then force after timeout).
+    /// - Fails immediately if Codex is running (sandbox cannot terminate other apps).
+    /// - Prompts for Codex folder access if no stored bookmark exists.
     /// - Restores saved session files.
     /// - Re-launches Codex.
     func activateSession(for accountId: UUID) async throws {
@@ -150,11 +160,18 @@ final class CodexOAuthSessionService: Sendable {
             throw CodexOAuthError.noSnapshot
         }
 
+        // Sandbox restrictions prevent sending signals or Apple Events to Codex.
+        // Fail fast with a clear user-facing message instead of a silent 5-second hang.
+        let bundleIds = ["com.openai.chat", "com.openai.codex"]
+        let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+        if !running.isEmpty {
+            throw CodexOAuthError.codexRunning
+        }
+
         guard let grantedURL = await resolveCodexFolderWithPermission() else {
             throw CodexOAuthError.captureFailed(reason: "Access to the Codex folder is required to switch accounts. Please select the Codex folder when prompted.")
         }
 
-        try await terminateCodex()
         try restoreSnapshot(for: accountId, to: grantedURL)
         reopenCodex()
         logger.info("CodexOAuth: session switched to \(accountId)")
@@ -166,34 +183,6 @@ final class CodexOAuthSessionService: Sendable {
     }
 
     // MARK: - Private Helpers
-
-    private func terminateCodex() async throws {
-        let bundleIds = ["com.openai.chat", "com.openai.codex"]
-        var terminated = false
-        for bundleId in bundleIds {
-            let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
-            for app in apps {
-                app.terminate()
-                terminated = true
-            }
-        }
-        guard terminated else { return }
-
-        // Wait up to 4 seconds for clean termination.
-        for _ in 0..<40 {
-            try? await Task.sleep(for: .milliseconds(100))
-            let still = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
-            if still.isEmpty { return }
-        }
-
-        // Force-kill if still running.
-        for bundleId in bundleIds {
-            for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleId) {
-                app.forceTerminate()
-            }
-        }
-        try? await Task.sleep(for: .milliseconds(500))
-    }
 
     private func restoreSnapshot(for accountId: UUID, to grantedURL: URL) throws {
         let src = Self.snapshotURL(for: accountId)
@@ -254,6 +243,7 @@ final class CodexOAuthSessionService: Sendable {
 
 enum CodexOAuthError: LocalizedError {
     case noSnapshot
+    case codexRunning
     case captureFailed(reason: String)
     case restoreFailed(item: String, reason: String)
 
@@ -261,6 +251,8 @@ enum CodexOAuthError: LocalizedError {
         switch self {
         case .noSnapshot:
             return "No saved Codex session for this account. Open Codex logged in as this account first, then save the session from the account menu."
+        case .codexRunning:
+            return "Codex is still open. Please quit Codex (⌘Q) first, then tap \"Switch to This in Codex\" again."
         case .captureFailed(let reason):
             return reason
         case .restoreFailed(let item, let reason):
