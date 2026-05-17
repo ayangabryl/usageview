@@ -33,13 +33,13 @@ final class CursorAuthService: Sendable {
         switch result.outcome {
         case .success:
             guard let session = result.session else {
-                throw CursorProbeError.noSessionCookie
+                throw CursorProbeError.noSessionCookie(details: "No session after browser sign-in.")
             }
             return applySession(session, for: accountId)
         case .cancelled:
             throw CancellationError()
         case let .failed(message):
-            throw CursorProbeError.networkError(message)
+            throw CursorProbeError.noSessionCookie(details: message)
         }
     }
 

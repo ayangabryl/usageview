@@ -10,10 +10,12 @@ extension BrowserCookieImportOrder {
     }
 
     func cookieImportCandidates(allowKeychainPrompt: Bool = false) -> [Browser] {
-        filter { browser in
+        let detection = BrowserDetection.shared
+        return filter { browser in
             if KeychainAccessGate.isDisabled, browser.usesKeychainForCookieDecryption {
                 return false
             }
+            guard detection.isCookieSourceAvailable(browser) else { return false }
             return BrowserCookieAccessGate.shouldAttempt(browser, allowKeychainPrompt: allowKeychainPrompt)
         }
     }

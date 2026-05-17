@@ -61,6 +61,15 @@ enum BrowserCookieAccessGate {
         }
     }
 
+    /// Clears Chromium cooldown blocks (call when user taps Import / Sign in).
+    static func clearCooldowns() {
+        lock.withLock { state in
+            loadIfNeeded(&state)
+            state.deniedUntilByBrowser.removeAll()
+            persist(state)
+        }
+    }
+
     private static func chromiumKeychainRequiresInteraction() -> Bool {
         for label in Browser.safeStorageLabels {
             switch KeychainAccessPreflight.checkGenericPassword(service: label.service, account: label.account) {

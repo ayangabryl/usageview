@@ -100,10 +100,10 @@ final class CursorLoginRunner {
         guard let lastError else {
             return "Timed out waiting for Cursor login. \(hint)"
         }
-        if let importError = lastError as? CursorCookieImportError,
-           case .safariNeedsFullDiskAccess = importError
+        if let probeError = lastError as? CursorProbeError,
+           case let .noSessionCookie(details) = probeError
         {
-            return lastError.localizedDescription
+            return details
         }
         return "Timed out waiting for Cursor login. \(hint) \(lastError.localizedDescription)"
     }

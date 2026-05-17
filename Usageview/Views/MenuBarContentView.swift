@@ -2713,7 +2713,7 @@ struct CursorInlineConnectView: View {
 
             ServiceIconView(serviceType: .cursor, avatarURL: nil, size: 48)
 
-            Text("Sign in with your browser (recommended), import cookies from Safari or Chrome, or paste a session token.")
+            Text("Sign in at cursor.com in Safari or Chrome, then Import. Chrome may ask for Safe Storage once — choose Always Allow.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -2828,6 +2828,7 @@ struct CursorInlineConnectView: View {
 
     private func startBrowserLogin() {
         loginTask?.cancel()
+        BrowserCookieAccessGate.clearCooldowns()
         isConnecting = true
         errorMessage = nil
         loginStatus = "Opening Cursor sign-in in your browser…"
@@ -2851,6 +2852,7 @@ struct CursorInlineConnectView: View {
 
     private func importFromBrowsers() {
         loginTask?.cancel()
+        BrowserCookieAccessGate.clearCooldowns()
         isConnecting = true
         errorMessage = nil
         loginStatus = "Reading browser cookies and validating with Cursor…"
