@@ -36,6 +36,9 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "" $KEYCHAIN_PATH
           echo "KEYCHAIN_NAME=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
+      - name: Select Xcode 16.4
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
       - name: Install create-dmg
         run: brew install create-dmg
 
