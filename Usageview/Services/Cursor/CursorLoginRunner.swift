@@ -7,7 +7,7 @@ import Foundation
 final class CursorLoginRunner {
     enum Phase: Sendable {
         case loading
-        case waitingLogin
+        case waitingLogin(attempt: Int)
         case success
         case failed(String)
     }
@@ -56,21 +56,29 @@ final class CursorLoginRunner {
             return Result(outcome: .failed(message), session: nil)
         }
 
-        onPhaseChange(.waitingLogin)
-        let probe = CursorStatusProbe()
         let deadline = Date().addingTimeInterval(timeout)
         var lastError: Error?
+        var attempt = 0
 
         repeat {
             if Task.isCancelled {
                 return Result(outcome: .cancelled, session: nil)
             }
 
+            attempt += 1
+            onPhaseChange(.waitingLogin(attempt: attempt))
+
             do {
-                let session = try await probe.fetchValidatedSession(
-                    accountId: accountId,
-                    allowCachedSessions: false,
-                    allowKeychainPrompt: true)
+                // CodexBar: poll off the main thread; no Keychain prompts each tick.
+                let accountId = self.accountId
+                let session = try await Task.detached(priority: .userInitiated) {
+                    let probe = CursorStatusProbe(networkTimeout: 8)
+                    return try await probe.fetchValidatedSession(
+                        accountId: accountId,
+                        allowCachedSessions: false,
+                        allowKeychainPrompt: false,
+                        loginPollMode: true)
+                }.value
                 onPhaseChange(.success)
                 return Result(outcome: .success, session: session)
             } catch {
@@ -88,9 +96,14 @@ final class CursorLoginRunner {
     }
 
     private static func timeoutMessage(lastError: Error?) -> String {
-        let hint = "Sign in to cursor.com in your browser, then try again."
+        let hint = "Sign in in the browser window, then tap Import from browsers. Safari needs Full Disk Access for Usageview."
         guard let lastError else {
             return "Timed out waiting for Cursor login. \(hint)"
+        }
+        if let importError = lastError as? CursorCookieImportError,
+           case .safariNeedsFullDiskAccess = importError
+        {
+            return lastError.localizedDescription
         }
         return "Timed out waiting for Cursor login. \(hint) \(lastError.localizedDescription)"
     }

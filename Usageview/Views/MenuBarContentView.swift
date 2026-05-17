@@ -2705,6 +2705,7 @@ struct CursorInlineConnectView: View {
     @State private var errorMessage: String?
     @State private var isConnecting = false
     @State private var loginStatus: String?
+    @State private var loginTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -2747,6 +2748,16 @@ struct CursorInlineConnectView: View {
             .tint(ServiceType.cursor.accentColor)
             .disabled(isConnecting)
             .padding(.horizontal, 16)
+
+            if isConnecting {
+                Button("Cancel", role: .cancel) {
+                    loginTask?.cancel()
+                    isConnecting = false
+                    loginStatus = nil
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+            }
 
             Button {
                 importFromBrowsers()
@@ -2816,14 +2827,16 @@ struct CursorInlineConnectView: View {
     }
 
     private func startBrowserLogin() {
+        loginTask?.cancel()
         isConnecting = true
         errorMessage = nil
         loginStatus = "Opening Cursor sign-in in your browser…"
-        Task {
+        loginTask = Task { @MainActor in
             do {
                 let info = try await authService.runBrowserLogin(for: accountId) { phase in
                     loginStatus = Self.loginStatusText(for: phase)
                 }
+                guard !Task.isCancelled else { return }
                 onDone(info)
             } catch is CancellationError {
                 errorMessage = nil
@@ -2832,22 +2845,26 @@ struct CursorInlineConnectView: View {
             }
             isConnecting = false
             loginStatus = nil
+            loginTask = nil
         }
     }
 
     private func importFromBrowsers() {
+        loginTask?.cancel()
         isConnecting = true
         errorMessage = nil
         loginStatus = "Reading browser cookies and validating with Cursor…"
-        Task {
+        loginTask = Task { @MainActor in
             do {
                 let info = try await authService.saveFromBrowser(for: accountId)
+                guard !Task.isCancelled else { return }
                 onDone(info)
             } catch {
                 errorMessage = error.localizedDescription
             }
             isConnecting = false
             loginStatus = nil
+            loginTask = nil
         }
     }
 
@@ -2874,8 +2891,8 @@ struct CursorInlineConnectView: View {
         switch phase {
         case .loading:
             "Preparing sign-in…"
-        case .waitingLogin:
-            "Complete sign-in in your browser. Usageview will detect it automatically."
+        case let .waitingLogin(attempt):
+            "Complete sign-in in your browser. Checking for session… (attempt \(attempt))"
         case .success:
             "Connected."
         case let .failed(message):
