@@ -12,6 +12,7 @@ struct MenuBarContentView: View {
     @State private var detailTab: DetailTab = .overview
     @State private var showCostBreakdownPopover: Bool = false
     @State private var codexSwitchError: String?
+    @State private var codexSwitchNotice: String?
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -97,6 +98,16 @@ struct MenuBarContentView: View {
             Button("OK", role: .cancel) { codexSwitchError = nil }
         } message: {
             Text(codexSwitchError ?? "")
+        }
+        .alert("Account Switched", isPresented: Binding(
+            get: { codexSwitchNotice != nil },
+            set: { isPresented in
+                if !isPresented { codexSwitchNotice = nil }
+            }
+        )) {
+            Button("Got it") { codexSwitchNotice = nil }
+        } message: {
+            Text(codexSwitchNotice ?? "")
         }
     }
 
@@ -350,8 +361,12 @@ struct MenuBarContentView: View {
             }
         } else if store.isCodexOAuth(account) {
             Task {
-                if let error = await store.activateCodexOAuthSession(for: account) {
-                    codexSwitchError = error
+                if let message = await store.activateCodexOAuthSession(for: account) {
+                    if message.hasPrefix("✓") {
+                        codexSwitchNotice = message
+                    } else {
+                        codexSwitchError = message
+                    }
                 }
             }
         }

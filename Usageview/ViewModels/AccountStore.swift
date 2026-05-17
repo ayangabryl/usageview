@@ -815,8 +815,9 @@ final class AccountStore {
     }
 
     func isActiveCodexSession(for account: Account) -> Bool {
-        guard isCodexManaged(account) else { return false }
-        return codexAuth.isActiveSession(for: account.id)
+        if isCodexManaged(account) { return codexAuth.isActiveSession(for: account.id) }
+        if isCodexOAuth(account) { return codexAuth.isActiveSession(for: account.id) }
+        return false
     }
 
     /// Switch active Codex CLI session to this account. Returns localized error text on failure.
@@ -943,38 +944,111 @@ final class AccountStore {
     }
 
     /// Switch Codex Desktop to the saved OAuth session for this account.
-    /// Force-quits Codex, writes ~/.codex/auth.json, then relaunches Codex.
+    ///
+    /// Strategy:
+    ///  1. Write Account B's tokens to auth.json (initial write).
+    ///  2. Try to quit Codex (AppleScript → terminate → forceTerminate).
+    ///  3a. Quit succeeded: write tokens AGAIN (Codex may have written Account A on exit),
+    ///      then reopen → Codex reads Account B. ✓
+    ///  3b. Quit failed: start a watcher that re-writes Account B's tokens every 2 s
+    ///      (counters any in-memory token refreshes by Codex) AND writes them one final
+    ///      time right after Codex exits — before relaunching. ✓
     func activateCodexOAuthSession(for account: Account) async -> String? {
-        // Kill Codex so it can't overwrite auth.json on exit, and so it re-reads it on launch.
-        let bundleIds = ["com.openai.chat", "com.openai.codex"]
-        let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
-
-        if !running.isEmpty {
-            // Try graceful quit first, then force-kill after 1.5s if still alive.
-            running.forEach { $0.terminate() }
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            let stillRunning = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
-            stillRunning.forEach { $0.forceTerminate() }
-            // Small pause to let the process fully exit before we write auth.json.
-            try? await Task.sleep(nanoseconds: 500_000_000)
-        }
-
         guard let homeURL = resolveHomeDirWithPermission() else {
             return nil  // user cancelled
         }
-        let accessing = homeURL.startAccessingSecurityScopedResource()
-        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
 
+        let bundleIds = ["com.openai.chat", "com.openai.codex"]
+        let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+        var codexStillRunning = !running.isEmpty
+
+        // ── Step 1: First write of Account B's tokens ──
         let fileURL = authFileURL(from: homeURL)
+        let accessing = homeURL.startAccessingSecurityScopedResource()
         do {
             _ = try codexAuth.activateSession(for: account.id, writingTo: fileURL)
-            reopenCodexDesktopApp()
-            Task { await refreshAccount(account) }
-            return nil
         } catch {
+            if accessing { homeURL.stopAccessingSecurityScopedResource() }
             UserDefaults.standard.removeObject(forKey: Self.codexHomeDirBookmarkKey)
             return error.localizedDescription
         }
+        if accessing { homeURL.stopAccessingSecurityScopedResource() }
+
+        // ── Step 2: Attempt to quit Codex ──
+        if codexStillRunning {
+            for bundleId in bundleIds {
+                var err: NSDictionary?
+                NSAppleScript(source: "tell application id \"\(bundleId)\" to quit")?.executeAndReturnError(&err)
+            }
+            running.forEach { $0.terminate() }
+
+            for _ in 0..<8 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if bundleIds.flatMap({ NSRunningApplication.runningApplications(withBundleIdentifier: $0) }).isEmpty {
+                    codexStillRunning = false; break
+                }
+            }
+
+            if codexStillRunning {
+                bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }.forEach { $0.forceTerminate() }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if bundleIds.flatMap({ NSRunningApplication.runningApplications(withBundleIdentifier: $0) }).isEmpty {
+                    codexStillRunning = false
+                }
+            }
+        }
+
+        // ── Step 3a: Codex quit — overwrite auth.json one final time (Codex may have written
+        //             Account A tokens during its shutdown sequence), then reopen ──
+        if !codexStillRunning {
+            let a2 = homeURL.startAccessingSecurityScopedResource()
+            _ = try? codexAuth.activateSession(for: account.id, writingTo: fileURL)
+            if a2 { homeURL.stopAccessingSecurityScopedResource() }
+            reopenCodexDesktopApp()
+            Task { await refreshAccount(account) }
+            return nil
+        }
+
+        // ── Step 3b: Auto-quit failed.
+        //    Watcher runs every 2 s:
+        //      • While Codex is alive  → re-write Account B tokens (counters Codex refresh writes)
+        //      • Once Codex exits      → write Account B tokens one last time, then reopen ──
+        startCodexReopenWatcher(for: account, homeURL: homeURL, fileURL: fileURL)
+        return "✓ Account switched. Codex won't close automatically — press ⌘Q in Codex and it will reopen as the new account."
+    }
+
+    /// Keeps re-writing Account B's tokens every 2 s so Codex can never win the race.
+    /// The moment Codex exits the watcher does one final authoritative write, then relaunches Codex.
+    private func startCodexReopenWatcher(for account: Account, homeURL: URL, fileURL: URL) {
+        let bundleIds = ["com.openai.chat", "com.openai.codex"]
+        var attemptsLeft = 150   // up to 5 minutes
+
+        var timer: Timer?
+        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            attemptsLeft -= 1
+            if attemptsLeft <= 0 { t.invalidate(); return }
+
+            let alive = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+
+            if alive.isEmpty {
+                // Codex has exited. Write Account B's tokens NOW — after Codex is fully gone,
+                // nothing can overwrite us — then relaunch.
+                t.invalidate()
+                let a = homeURL.startAccessingSecurityScopedResource()
+                _ = try? self.codexAuth.activateSession(for: account.id, writingTo: fileURL)
+                if a { homeURL.stopAccessingSecurityScopedResource() }
+                self.reopenCodexDesktopApp()
+                Task { await self.refreshAccount(account) }
+            } else {
+                // Codex still running. Re-write tokens to override any Codex refresh that may
+                // have happened since our last write.
+                let a = homeURL.startAccessingSecurityScopedResource()
+                _ = try? self.codexAuth.activateSession(for: account.id, writingTo: fileURL)
+                if a { homeURL.stopAccessingSecurityScopedResource() }
+            }
+        }
+        if let t = timer { RunLoop.main.add(t, forMode: .common) }
     }
 
     func canSwitchCodexSession(for account: Account) -> Bool {
