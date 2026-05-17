@@ -1017,8 +1017,8 @@ final class AccountStore {
         return "✓ Account switched. Codex won't close automatically — press ⌘Q in Codex and it will reopen as the new account."
     }
 
-    /// Keeps re-writing Account B's tokens every 2 s so Codex can never win the race.
-    /// The moment Codex exits the watcher does one final authoritative write, then relaunches Codex.
+    /// Waits for Codex to exit (up to 5 minutes), then writes Account B's tokens and relaunches.
+    /// Does NOT re-write while Codex is running — that would invalidate OAuth refresh tokens.
     private func startCodexReopenWatcher(for account: Account, homeURL: URL, fileURL: URL) {
         let bundleIds = ["com.openai.chat", "com.openai.codex"]
         var attemptsLeft = 150   // up to 5 minutes
@@ -1030,23 +1030,15 @@ final class AccountStore {
             if attemptsLeft <= 0 { t.invalidate(); return }
 
             let alive = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+            guard alive.isEmpty else { return }
 
-            if alive.isEmpty {
-                // Codex has exited. Write Account B's tokens NOW — after Codex is fully gone,
-                // nothing can overwrite us — then relaunch.
-                t.invalidate()
-                let a = homeURL.startAccessingSecurityScopedResource()
-                _ = try? self.codexAuth.activateSession(for: account.id, writingTo: fileURL)
-                if a { homeURL.stopAccessingSecurityScopedResource() }
-                self.reopenCodexDesktopApp()
-                Task { await self.refreshAccount(account) }
-            } else {
-                // Codex still running. Re-write tokens to override any Codex refresh that may
-                // have happened since our last write.
-                let a = homeURL.startAccessingSecurityScopedResource()
-                _ = try? self.codexAuth.activateSession(for: account.id, writingTo: fileURL)
-                if a { homeURL.stopAccessingSecurityScopedResource() }
-            }
+            // Codex has fully exited — safe to write Account B's tokens now (nothing can overwrite).
+            t.invalidate()
+            let a = homeURL.startAccessingSecurityScopedResource()
+            _ = try? self.codexAuth.activateSession(for: account.id, writingTo: fileURL)
+            if a { homeURL.stopAccessingSecurityScopedResource() }
+            self.reopenCodexDesktopApp()
+            Task { await self.refreshAccount(account) }
         }
         if let t = timer { RunLoop.main.add(t, forMode: .common) }
     }
