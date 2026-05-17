@@ -8,6 +8,10 @@ import Security
 enum KeychainHelper {
     static let service = "com.ayangabryl.usage"
 
+    /// Keychain access group tied to the developer team rather than a specific binary,
+    /// so re-installs via DMG never trigger "allow access" dialogs.
+    static let accessGroup = "MZRACJ7Z64.com.ayangabryl.quotabar"
+
     private static var sessionCache: [String: String] = [:]
     private static let cacheLock = NSLock()
 
@@ -15,19 +19,14 @@ enum KeychainHelper {
     static func save(_ value: String, forKey key: String) {
         let data = Data(value.utf8)
 
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        // Legacy items may exist without kSecAttrService.
-        let legacyDelete: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(legacyDelete as CFDictionary)
+        // Delete any existing item regardless of which access group it was saved in.
+        for deleteQuery: [String: Any] in [
+            [kSecClass as String: kSecClassGenericPassword,
+             kSecAttrService as String: service,
+             kSecAttrAccount as String: key],
+            [kSecClass as String: kSecClassGenericPassword,
+             kSecAttrAccount as String: key],
+        ] { SecItemDelete(deleteQuery as CFDictionary) }
 
         var addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -35,6 +34,7 @@ enum KeychainHelper {
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessGroup as String: accessGroup,
         ]
         SecItemAdd(addQuery as CFDictionary, nil)
 
@@ -142,13 +142,18 @@ enum KeychainHelper {
     // MARK: - Private
 
     private static func loadFromKeychain(forKey key: String, interactive: Bool) -> String? {
-        if let value = query(account: key, service: service, interactive: interactive) {
+        // Try with explicit access group first (post-V3 migration items), then fall back
+        // to no-group queries for items saved before the access group was introduced.
+        if let value = query(account: key, service: service, group: accessGroup, interactive: interactive) {
             return value
         }
-        return query(account: key, service: nil, interactive: interactive)
+        if let value = query(account: key, service: service, group: nil, interactive: interactive) {
+            return value
+        }
+        return query(account: key, service: nil, group: nil, interactive: interactive)
     }
 
-    private static func query(account: String, service: String?, interactive: Bool) -> String? {
+    private static func query(account: String, service: String?, group: String?, interactive: Bool) -> String? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
@@ -157,6 +162,9 @@ enum KeychainHelper {
         ]
         if let service {
             query[kSecAttrService as String] = service
+        }
+        if let group {
+            query[kSecAttrAccessGroup as String] = group
         }
 
         if interactive {

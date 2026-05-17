@@ -29,11 +29,20 @@ enum KeychainCacheStore {
             kSecAttrAccount as String: key.account,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
+            kSecAttrAccessGroup as String: KeychainHelper.accessGroup,
         ]
         KeychainNoUIQuery.apply(to: &query)
 
         var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        var status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        // Fall back to items saved without explicit access group (pre-migration).
+        if status == errSecItemNotFound {
+            var fallback = query
+            fallback.removeValue(forKey: kSecAttrAccessGroup as String)
+            status = SecItemCopyMatching(fallback as CFDictionary, &result)
+        }
+
         switch status {
         case errSecSuccess:
             guard let data = result as? Data,
@@ -53,22 +62,23 @@ enum KeychainCacheStore {
         guard !KeychainAccessGate.isDisabled else { return }
         guard let data = try? JSONEncoder().encode(entry) else { return }
 
-        let query: [String: Any] = [
+        // Delete any pre-existing item in any group before re-creating with access group.
+        let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: cacheService,
             kSecAttrAccount as String: key.account,
         ]
+        SecItemDelete(deleteQuery as CFDictionary)
 
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
-        )
-        if updateStatus == errSecSuccess { return }
-
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrLabel as String] = cacheLabel
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: cacheService,
+            kSecAttrAccount as String: key.account,
+            kSecValueData as String: data,
+            kSecAttrLabel as String: cacheLabel,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessGroup as String: KeychainHelper.accessGroup,
+        ]
         SecItemAdd(addQuery as CFDictionary, nil)
     }
 
