@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import Darwin
+import UniformTypeIdentifiers
 
 struct MenuBarContentView: View {
     @Bindable var store: AccountStore
@@ -356,11 +358,9 @@ struct MenuBarContentView: View {
     }
 
     private func enableCodexCLI(for account: Account) {
-        guard account.serviceType == .chatgpt && account.authMethod == .oauth,
-              let index = store.accounts.firstIndex(where: { $0.id == account.id })
-        else { return }
-        store.accounts[index].authMethod = .codexCLI
-        store.save()
+        guard account.serviceType == .chatgpt else { return }
+        // Navigate to the CLI import screen WITHOUT touching the account's existing
+        // auth method or credentials — they are only updated on successful import.
         navigate(to: .connectOpenAICodexCLI(account.id))
     }
 
@@ -519,10 +519,6 @@ struct MenuBarContentView: View {
 
                     if serviceType == .chatgpt {
                         Button {
-                            if let index = store.accounts.firstIndex(where: { $0.id == accountId }) {
-                                store.accounts[index].authMethod = .codexCLI
-                                store.save()
-                            }
                             navigate(to: .connectOpenAICodexCLI(accountId))
                         } label: {
                             HStack(spacing: 8) {
@@ -920,6 +916,14 @@ struct MenuBarContentView: View {
             accountId: accountId,
             onDone: { info in
                 if let info {
+                    // Successful import — upgrade auth method and refresh.
+                    if let index = store.accounts.firstIndex(where: { $0.id == accountId }) {
+                        store.accounts[index].authMethod = .codexCLI
+                        if let name = info.name, !name.isEmpty {
+                            store.accounts[index].username = name
+                        }
+                        store.save()
+                    }
                     store.updateAccountAfterConnect(
                         id: accountId,
                         username: info.name,
@@ -932,7 +936,14 @@ struct MenuBarContentView: View {
                     }
                     goHome()
                 } else {
-                    store.removeAccount(id: accountId)
+                    // Back pressed without importing.
+                    // Only remove the account if it was a brand-new, never-connected account
+                    // (no stored token). If the user had an existing OAuth connection, keep it.
+                    let alreadyConnected = store.accounts.first(where: { $0.id == accountId })
+                        .map { store.isConnected(for: $0) } ?? false
+                    if !alreadyConnected {
+                        store.removeAccount(id: accountId)
+                    }
                     goBack()
                 }
             }
@@ -3449,8 +3460,29 @@ struct CodexInlineConnectView: View {
             Button {
                 isConnecting = true
                 errorMessage = nil
+                // NSOpenPanel grants sandbox access to ~/.codex/auth.json.
+                let panel = NSOpenPanel()
+                panel.message = "Select your Codex auth.json file to import the session."
+                panel.prompt = "Import"
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = false
+                panel.allowsMultipleSelection = false
+                panel.showsHiddenFiles = true
+                panel.allowedContentTypes = [.json]
+                panel.nameFieldStringValue = "auth.json"
+                // Pre-navigate to ~/.codex/ using the real (non-sandboxed) home.
+                if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+                    let realHome = String(cString: dir)
+                    panel.directoryURL = URL(fileURLWithPath: "\(realHome)/.codex")
+                }
+                guard panel.runModal() == .OK, let fileURL = panel.url else {
+                    isConnecting = false
+                    return
+                }
+                let accessing = fileURL.startAccessingSecurityScopedResource()
+                defer { if accessing { fileURL.stopAccessingSecurityScopedResource() } }
                 do {
-                    let info = try authService.connectFromCLI(for: accountId)
+                    let info = try authService.connectFromCLI(for: accountId, authFileURL: fileURL)
                     onDone(info)
                 } catch {
                     errorMessage = error.localizedDescription
@@ -3461,7 +3493,7 @@ struct CodexInlineConnectView: View {
                     if isConnecting {
                         ProgressView().controlSize(.small)
                     }
-                    Text(isConnecting ? "Reading ~/.codex/auth.json…" : "Import from Codex CLI")
+                    Text(isConnecting ? "Reading auth.json…" : "Import from Codex CLI")
                         .font(.subheadline.weight(.medium))
                 }
                 .frame(maxWidth: .infinity)

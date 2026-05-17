@@ -16,6 +16,22 @@ final class CodexAuthService: Sendable {
     /// Import OAuth token from `~/.codex/auth.json` (Codex CLI login).
     func connectFromCLI(for accountId: UUID) throws -> CodexAccountInfo {
         let snapshot = try loadCLIAuthSnapshot()
+        return try saveSnapshot(snapshot, for: accountId)
+    }
+
+    /// Import from an explicit `auth.json` URL (obtained via NSOpenPanel security-scoped access).
+    func connectFromCLI(for accountId: UUID, authFileURL: URL) throws -> CodexAccountInfo {
+        let data = try Data(contentsOf: authFileURL)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CodexAuthError.invalidFormat
+        }
+        let rawString = String(data: data, encoding: .utf8) ?? "{}"
+        let creds = try parseCredentials(from: json)
+        let snapshot = CLIAuthSnapshot(credentials: creds, rawJSONString: rawString)
+        return try saveSnapshot(snapshot, for: accountId)
+    }
+
+    private func saveSnapshot(_ snapshot: CLIAuthSnapshot, for accountId: UUID) throws -> CodexAccountInfo {
         let creds = snapshot.credentials
         saveToken(key: tokenKey(for: accountId), value: creds.accessToken)
         if let accountIdString = creds.accountId {
@@ -223,6 +239,7 @@ final class CodexAuthService: Sendable {
 enum CodexAuthError: LocalizedError {
     case notFound(checkedPaths: [String])
     case invalidFile
+    case invalidFormat
     case missingTokens
     case noSavedSession
     case invalidSavedSession
@@ -234,6 +251,8 @@ enum CodexAuthError: LocalizedError {
             return "Codex auth.json not found. Checked: \(paths). Run `codex login` in Terminal, then try import again."
         case .invalidFile:
             return "Could not read Codex auth.json."
+        case .invalidFormat:
+            return "The selected file is not a valid Codex auth.json."
         case .missingTokens:
             return "Codex auth.json has no tokens. Run `codex` to sign in."
         case .noSavedSession:
