@@ -2,18 +2,18 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
     <title>Usageview Updates</title>
-    <link>https://raw.githubusercontent.com/ayangabryl/Usageview/main/appcast.xml</link>
+    <link>https://raw.githubusercontent.com/ayangabryl/usageview/main/appcast.xml</link>
     <description>Most recent changes with links to updates.</description>
     <language>en</language>
     <item>
-      <title>Version 1.2.0</title>
-      <pubDate>Wed, 11 Mar 2026 12:29:34 +0800</pubDate>
-      <sparkle:version>2</sparkle:version>
-      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      <title>Version 1.3.0</title>
+      <pubDate>Sun, 17 May 2026 22:15:29 +0800</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>1.3.0</sparkle:shortVersionString>
       <enclosure
-        url="https://github.com/ayangabryl/Usageview/releases/download/v1.2.0/Usageview-1.2.0.dmg"
-        sparkle:edSignature="bScE8SXXlks762l/hpIVOJA0CX/Sd+kJaJoEBMFGwx9qrXuWNRIrEUf/QTxG5TVohErK5TA5gqMKfnmTuZJOCA=="
-        length="2843068"
+        url="https://github.com/ayangabryl/usageview/releases/download/v1.3.0/Usageview-1.3.0.dmg"
+        sparkle:edSignature="H3l49CGrXEgLTLb9PhFFaRL1gR/gkRMob1LV3KHhRUBBa6G7vW1cRjxVnTdwJzYOognCJuvFG/P6V/M0o+lRBg=="
+        length="4262192"
         type="application/octet-stream" />
     </item>
   </channel>
