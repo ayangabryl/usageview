@@ -19,11 +19,9 @@ final class CodexAuthService: Sendable {
         return try saveSnapshot(snapshot, for: accountId)
     }
 
-    /// Import from an explicit `auth.json` URL (obtained via NSOpenPanel security-scoped access).
+    /// Import from an explicit `auth.json` URL.
+    /// The caller must already hold an active security-scoped resource on the parent directory.
     func connectFromCLI(for accountId: UUID, authFileURL: URL) throws -> CodexAccountInfo {
-        let accessing = authFileURL.startAccessingSecurityScopedResource()
-        defer { if accessing { authFileURL.stopAccessingSecurityScopedResource() } }
-
         let data = try Data(contentsOf: authFileURL)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CodexAuthError.invalidFormat
@@ -34,8 +32,8 @@ final class CodexAuthService: Sendable {
         return try saveSnapshot(snapshot, for: accountId)
     }
 
-    /// Restore a saved session by writing auth.json to a security-scoped URL.
-    /// Used when the sandbox cannot write to the real path directly.
+    /// Restore a saved session by writing auth.json to `authFileURL`.
+    /// The caller must already hold an active security-scoped resource on the parent directory.
     func activateSession(for accountId: UUID, writingTo authFileURL: URL) throws -> CodexAccountInfo {
         guard let snapshotRaw = loadToken(key: authSnapshotKey(for: accountId)) else {
             throw CodexAuthError.noSavedSession
@@ -45,9 +43,6 @@ final class CodexAuthService: Sendable {
         else {
             throw CodexAuthError.invalidSavedSession
         }
-
-        let accessing = authFileURL.startAccessingSecurityScopedResource()
-        defer { if accessing { authFileURL.stopAccessingSecurityScopedResource() } }
 
         let writeData = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
         let directory = authFileURL.deletingLastPathComponent()

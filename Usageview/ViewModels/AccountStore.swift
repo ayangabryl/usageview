@@ -845,24 +845,18 @@ final class AccountStore {
     }
 
     // MARK: - OAuth session helpers
-    // OAuth (ChatGPT) accounts store their tokens in ~/.codex/auth.json — exactly
-    // the same file as CLI accounts, just with "auth_mode": "chatgpt".
-    // The sandbox blocks direct reads/writes, so we use a security-scoped bookmark
-    // obtained once via NSOpenPanel (user selects auth.json explicitly).
+    // OAuth (ChatGPT) accounts store their tokens in ~/.codex/auth.json.
+    // The sandbox blocks direct access, so we bookmark the user's HOME directory
+    // (always visible in the file picker) and derive ~/.codex/auth.json from it.
 
-    private static let codexAuthFileBookmarkKey = "CodexAuthFileBookmarkV1"
+    private static let codexHomeDirBookmarkKey = "CodexHomeDirBookmarkV1"
 
-    /// Expected location of auth.json so we can pre-navigate NSOpenPanel there.
-    private static var expectedAuthFileURL: URL {
-        CodexAuthService.realHomeDirectory().appendingPathComponent(".codex/auth.json")
-    }
-
-    /// Returns a security-scoped URL for ~/.codex/auth.json.
+    /// Returns a security-scoped URL for the home directory.
     /// Uses a stored bookmark when available; otherwise shows NSOpenPanel once.
     /// Returns nil if the user cancels.
     @MainActor
-    func resolveCodexAuthFileWithPermission() -> URL? {
-        let key = Self.codexAuthFileBookmarkKey
+    func resolveHomeDirWithPermission() -> URL? {
+        let key = Self.codexHomeDirBookmarkKey
 
         // Try stored bookmark first.
         if let data = UserDefaults.standard.data(forKey: key) {
@@ -870,28 +864,34 @@ final class AccountStore {
             if let url = try? URL(resolvingBookmarkData: data,
                                   options: .withSecurityScope,
                                   relativeTo: nil,
-                                  bookmarkDataIsStale: &isStale),
-               !isStale {
+                                  bookmarkDataIsStale: &isStale) {
+                if isStale {
+                    // Silently renew the bookmark while we still have access.
+                    if let renewed = try? url.bookmarkData(options: .withSecurityScope,
+                                                           includingResourceValuesForKeys: nil,
+                                                           relativeTo: nil) {
+                        UserDefaults.standard.set(renewed, forKey: key)
+                    }
+                }
                 return url
             }
             UserDefaults.standard.removeObject(forKey: key)
         }
 
-        // Prompt user once for explicit access.
+        // Prompt user to select their home folder (always visible, no hidden files needed).
         let panel = NSOpenPanel()
-        panel.message = "Select your ~/.codex/auth.json file so Usageview can save and switch Codex accounts."
+        panel.message = "Select your home folder (e.g. \"/Users/\(NSUserName())\") so Usageview can access ~/.codex/auth.json to save and switch Codex accounts."
         panel.prompt = "Grant Access"
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.showsHiddenFiles = true
-        panel.allowedContentTypes = []
-        panel.nameFieldStringValue = "auth.json"
-        panel.directoryURL = Self.expectedAuthFileURL.deletingLastPathComponent()
+        panel.showsHiddenFiles = false
+        // Open at the parent of home so the home folder itself is visible and selectable.
+        panel.directoryURL = CodexAuthService.realHomeDirectory().deletingLastPathComponent()
 
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
 
-        // Store bookmark for future use.
+        // Store bookmark — persists across restarts.
         if let bookmarkData = try? url.bookmarkData(options: .withSecurityScope,
                                                      includingResourceValuesForKeys: nil,
                                                      relativeTo: nil) {
@@ -900,55 +900,79 @@ final class AccountStore {
         return url
     }
 
+    /// Resolves auth.json URL from a home directory security-scoped URL.
+    /// Checks both ~/.codex/auth.json (standard) and the directory itself if it IS .codex.
+    private func authFileURL(from homeURL: URL) -> URL {
+        // If the user somehow selected the .codex dir itself, handle gracefully.
+        let lastComponent = homeURL.lastPathComponent
+        if lastComponent == ".codex" {
+            return homeURL.appendingPathComponent("auth.json")
+        }
+        return homeURL.appendingPathComponent(".codex/auth.json")
+    }
+
     func hasSavedCodexOAuthSession(for account: Account) -> Bool {
         guard isCodexOAuth(account) else { return false }
         return codexAuth.hasSavedSession(for: account.id)
     }
 
     /// Capture the current Codex Desktop OAuth session for this account.
-    /// Prompts the user to select ~/.codex/auth.json on first run (stored bookmark after that).
-    /// Returns a localized error string on failure, nil on success.
+    /// Asks for home folder access once, then reuses the stored bookmark silently.
     func captureCodexOAuthSession(for account: Account) async -> String? {
         guard account.serviceType == .chatgpt else {
             return "This account is not a ChatGPT/OpenAI account."
         }
-        guard let authFileURL = resolveCodexAuthFileWithPermission() else {
+        guard let homeURL = resolveHomeDirWithPermission() else {
             return nil  // user cancelled
         }
+        let accessing = homeURL.startAccessingSecurityScopedResource()
+        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
+
+        let fileURL = authFileURL(from: homeURL)
         do {
-            let info = try codexAuth.connectFromCLI(for: account.id, authFileURL: authFileURL)
+            let info = try codexAuth.connectFromCLI(for: account.id, authFileURL: fileURL)
             if let index = accounts.firstIndex(where: { $0.id == account.id }) {
                 if let name = info.name { accounts[index].username = name }
                 save()
             }
             return nil
         } catch {
-            // Invalidate the bookmark so the user can re-select the correct file next time.
-            UserDefaults.standard.removeObject(forKey: Self.codexAuthFileBookmarkKey)
+            UserDefaults.standard.removeObject(forKey: Self.codexHomeDirBookmarkKey)
             return "Could not save Codex session: \(error.localizedDescription)\n\nMake sure Codex is logged in as this account, then try again."
         }
     }
 
     /// Switch Codex Desktop to the saved OAuth session for this account.
-    /// Writes ~/.codex/auth.json with the saved tokens and relaunches Codex.
-    /// Returns a localized error string on failure, nil on success.
+    /// Force-quits Codex, writes ~/.codex/auth.json, then relaunches Codex.
     func activateCodexOAuthSession(for account: Account) async -> String? {
-        // Fail fast if Codex is still open — it won't re-read auth.json until restart.
+        // Kill Codex so it can't overwrite auth.json on exit, and so it re-reads it on launch.
         let bundleIds = ["com.openai.chat", "com.openai.codex"]
         let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+
         if !running.isEmpty {
-            return "Codex is still open. Please quit Codex (⌘Q) first, then tap \"Switch to This in Codex\" again."
+            // Try graceful quit first, then force-kill after 1.5s if still alive.
+            running.forEach { $0.terminate() }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let stillRunning = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+            stillRunning.forEach { $0.forceTerminate() }
+            // Small pause to let the process fully exit before we write auth.json.
+            try? await Task.sleep(nanoseconds: 500_000_000)
         }
-        guard let authFileURL = resolveCodexAuthFileWithPermission() else {
+
+        guard let homeURL = resolveHomeDirWithPermission() else {
             return nil  // user cancelled
         }
+        let accessing = homeURL.startAccessingSecurityScopedResource()
+        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
+
+        let fileURL = authFileURL(from: homeURL)
         do {
-            _ = try codexAuth.activateSession(for: account.id, writingTo: authFileURL)
+            _ = try codexAuth.activateSession(for: account.id, writingTo: fileURL)
             reopenCodexDesktopApp()
             Task { await refreshAccount(account) }
             return nil
         } catch {
-            UserDefaults.standard.removeObject(forKey: Self.codexAuthFileBookmarkKey)
+            UserDefaults.standard.removeObject(forKey: Self.codexHomeDirBookmarkKey)
             return error.localizedDescription
         }
     }
