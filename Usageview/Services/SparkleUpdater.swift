@@ -8,8 +8,9 @@ import Sparkle
 /// SwiftUI views can trigger "Check for Updates" with a simple binding.
 @Observable
 @MainActor
-final class SparkleUpdater {
+final class SparkleUpdater: NSObject {
     private let controller: SPUStandardUpdaterController
+    private var observation: NSKeyValueObservation?
 
     var canCheckForUpdates: Bool = false
     var automaticallyChecksForUpdates: Bool {
@@ -17,14 +18,19 @@ final class SparkleUpdater {
         set { controller.updater.automaticallyChecksForUpdates = newValue }
     }
 
-    init() {
+    override init() {
         controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
-        // Sparkle needs a tick to initialise; observe real property
-        canCheckForUpdates = controller.updater.canCheckForUpdates
+        super.init()
+        // KVO-observe canCheckForUpdates — Sparkle flips it to true after startup
+        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+            DispatchQueue.main.async {
+                self?.canCheckForUpdates = updater.canCheckForUpdates
+            }
+        }
     }
 
     func checkForUpdates() {
