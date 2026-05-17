@@ -613,18 +613,30 @@ final class AccountStore {
         case .cursor:
             if let usage = await cursorUsage.fetchUsage(for: account.id) {
                 if let index = accounts.firstIndex(where: { $0.id == account.id }) {
-                    if usage.limitCents > 0 {
-                        accounts[index].currentUsage = usage.usedCents
-                        accounts[index].usageLimit = usage.limitCents
-                        accounts[index].usageUnit = "requests"
-                        accounts[index].planName = usage.planName
-                        if let reset = usage.billingCycleEnd {
-                            accounts[index].resetDate = reset
-                        }
-                        recordSpendSnapshot(index: index, cumulativeUSD: usage.usedCents / 100.0)
-                    } else {
-                        accounts[index].usageUnit = usage.planName ?? "Connected"
+                    accounts[index].currentUsage = usage.planPercentUsed
+                    accounts[index].usageLimit = 100
+                    accounts[index].fiveHourUsage = usage.autoPercentUsed
+                    accounts[index].tertiaryUsage = usage.apiPercentUsed ?? usage.requestPercentUsed
+                    accounts[index].planName = usage.planName
+                    accounts[index].monthlySpendUSD = usage.planUsedUSD
+                    accounts[index].monthlySpendLimitUSD = usage.planLimitUSD > 0 ? usage.planLimitUSD : nil
+                    if let reset = usage.billingCycleEnd {
+                        accounts[index].resetDate = reset
                     }
+                    if usage.hasRequestLane, let used = usage.requestsUsed, let limit = usage.requestsLimit {
+                        accounts[index].usageUnit = "\(used)/\(limit) API requests"
+                    } else if usage.planLimitUSD > 0 {
+                        accounts[index].usageUnit = String(
+                            format: "$%.2f / $%.2f plan",
+                            usage.planUsedUSD,
+                            usage.planLimitUSD)
+                    } else {
+                        accounts[index].usageUnit = String(format: "%.0f%% Total", usage.planPercentUsed)
+                    }
+                    if let email = usage.accountEmail ?? usage.accountName {
+                        accounts[index].username = email
+                    }
+                    recordSpendSnapshot(index: index, cumulativeUSD: usage.planUsedUSD)
                     save()
                 }
             }

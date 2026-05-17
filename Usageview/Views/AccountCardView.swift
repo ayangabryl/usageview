@@ -192,6 +192,38 @@ struct AccountCardView: View {
                             }
                         }
                     }
+                } else if account.hasCursorLanes {
+                    if isRefreshing {
+                        HStack {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Spacer()
+                        }
+                    }
+                    claudeRateRow(
+                        label: account.serviceType.primaryRateLabel(authMethod: account.authMethod),
+                        usage: account.currentUsage,
+                        resetDate: account.resetDate
+                    )
+                    if let auto = account.fiveHourUsage {
+                        claudeRateRow(
+                            label: account.serviceType.secondaryRateLabel(authMethod: account.authMethod),
+                            usage: auto,
+                            resetDate: account.resetDate
+                        )
+                    }
+                    if let api = account.tertiaryUsage {
+                        claudeRateRow(
+                            label: account.serviceType.tertiaryRateLabel() ?? "API",
+                            usage: api,
+                            resetDate: account.resetDate
+                        )
+                    }
+                    if let spend = account.monthlySpendUSD, let limit = account.monthlySpendLimitUSD, limit > 0 {
+                        Text(String(format: "Plan spend $%.2f / $%.2f", spend, limit))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 } else if account.hasZaiTripleWindows {
                     if isRefreshing {
                         HStack {

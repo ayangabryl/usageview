@@ -205,7 +205,16 @@ struct Account: Codable, Identifiable, Sendable {
 
     /// Whether this Cursor account has usage data
     var hasCursorUsage: Bool {
-        serviceType == .cursor && usageLimit > 0
+        guard serviceType == .cursor else { return false }
+        return usageLimit > 0
+            || fiveHourUsage != nil
+            || tertiaryUsage != nil
+            || (monthlySpendLimitUSD ?? 0) > 0
+    }
+
+    /// Cursor: Total / Auto / API lanes (CodexBar-style)
+    var hasCursorLanes: Bool {
+        serviceType == .cursor && hasCursorUsage
     }
 
     /// Whether this OpenRouter account has credits data

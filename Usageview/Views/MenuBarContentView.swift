@@ -1032,6 +1032,38 @@ struct MenuBarContentView: View {
                                     .controlSize(.mini)
                                     .padding(.top, 4)
 
+                                } else if account.hasCursorLanes {
+                                    detailRateRow(
+                                        label: "Total (plan)",
+                                        usage: account.currentUsage,
+                                        subtitle: account.monthlySpendLimitUSD.map {
+                                            String(format: "$%.2f / $%.2f", account.monthlySpendUSD ?? 0, $0)
+                                        },
+                                        resetDate: account.resetDate,
+                                        accentColor: account.accentColor,
+                                        maxResetHours: 24 * 35
+                                    )
+                                    if let auto = account.fiveHourUsage {
+                                        detailRateRow(
+                                            label: "Auto",
+                                            usage: auto,
+                                            subtitle: nil,
+                                            resetDate: account.resetDate,
+                                            accentColor: account.accentColor,
+                                            maxResetHours: 24 * 35
+                                        )
+                                    }
+                                    if let api = account.tertiaryUsage {
+                                        detailRateRow(
+                                            label: "API",
+                                            usage: api,
+                                            subtitle: account.usageUnit.contains("requests") ? account.usageUnit : nil,
+                                            resetDate: account.resetDate,
+                                            accentColor: account.accentColor,
+                                            maxResetHours: 24 * 35
+                                        )
+                                    }
+
                                 } else if account.hasZaiTripleWindows {
                                     detailRateRow(
                                         label: "Token quota",
@@ -1526,8 +1558,10 @@ struct MenuBarContentView: View {
             return "5-hour and weekly rolling windows"
         case .zai:
             return "Token, MCP, and short-window quotas"
-        case .copilot, .cursor:
+        case .copilot:
             return "Monthly billing cycle"
+        case .cursor:
+            return "Total, Auto, and API usage lanes (monthly cycle)"
         case .openrouter:
             return "Credit balance tracking"
         case .gemini:
@@ -1540,8 +1574,11 @@ struct MenuBarContentView: View {
     }
 
     private func usagePrimaryMetric(for account: Account) -> String {
-        if account.serviceType == .cursor, account.usageLimit > 0 {
-            return String(format: "$%.2f / $%.2f used this cycle", account.currentUsage / 100.0, account.usageLimit / 100.0)
+        if account.hasCursorLanes {
+            if let spend = account.monthlySpendUSD, let limit = account.monthlySpendLimitUSD, limit > 0 {
+                return String(format: "$%.2f / $%.2f plan · %.0f%% Total", spend, limit, account.currentUsage)
+            }
+            return String(format: "%.0f%% Total used", account.currentUsage)
         }
         if account.hasOpenRouterCredits,
            let used = account.openRouterTotalUsage,
@@ -1564,11 +1601,6 @@ struct MenuBarContentView: View {
                 return String(format: "$%.2f / $%.2f", spend, limit)
             }
             return String(format: "$%.2f", spend)
-        }
-        if account.serviceType == .cursor, account.usageLimit > 0 {
-            let used = account.currentUsage / 100.0
-            let limit = account.usageLimit / 100.0
-            return String(format: "$%.2f / $%.2f", used, limit)
         }
         return nil
     }
@@ -1632,10 +1664,6 @@ struct MenuBarContentView: View {
 
         if account.hasOpenRouterCredits, let used = account.openRouterTotalUsage {
             return String(format: "$%.2f", used)
-        }
-
-        if account.serviceType == .cursor, account.usageLimit > 0 {
-            return String(format: "$%.2f", account.currentUsage / 100.0)
         }
 
         return "Not available"

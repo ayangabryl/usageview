@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var claudeKeychainPromptModeRaw: String = UserDefaults.standard.string(forKey: "claudeOAuthKeychainPromptMode")
         ?? ClaudeKeychainPromptMode.onlyOnUserAction.rawValue
     @State private var allowGeminiCLIKeychainAccess: Bool = UserDefaults.standard.bool(forKey: "allowGeminiCLIKeychainAccess")
+    @State private var cursorCookieSourceRaw: String = UserDefaults.standard.string(forKey: "cursorCookieSource") ?? CursorSettings.CookieSource.auto.rawValue
+    @State private var cursorManualCookieHeader: String = UserDefaults.standard.string(forKey: "cursorManualCookieHeader") ?? ""
     @State private var claudeKeychainReadStrategyRaw: String = UserDefaults.standard.string(forKey: "claudeOAuthKeychainReadStrategy")
         ?? ClaudeKeychainReadStrategy.securityCLIExperimental.rawValue
     @State private var claudeKeychainStatusMessage: String?
@@ -535,6 +537,49 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)
                         .padding(.top, -4)
+                }
+            }
+
+            providerCard(
+                serviceType: .cursor,
+                title: "Cursor",
+                subtitle: "Browser cookies, cache, and manual session (CodexBar-style)"
+            ) {
+                settingsRow(
+                    icon: "globe",
+                    title: "Cookie source",
+                    subtitle: "Automatic reads Safari/Chrome; manual uses pasted Cookie header"
+                ) {
+                    Picker("", selection: Binding(
+                        get: { cursorCookieSourceRaw },
+                        set: { newValue in
+                            cursorCookieSourceRaw = newValue
+                            if let source = CursorSettings.CookieSource(rawValue: newValue) {
+                                CursorSettings.cookieSource = source
+                            }
+                        }
+                    )) {
+                        ForEach(CursorSettings.CookieSource.allCases) { source in
+                            Text(source.displayName).tag(source.rawValue)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 240)
+                }
+
+                if cursorCookieSourceRaw == CursorSettings.CookieSource.manual.rawValue {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Manual Cookie header")
+                            .font(.caption.weight(.medium))
+                        TextField("WorkosCursorSessionToken=… or full Cookie:", text: $cursorManualCookieHeader, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(3...6)
+                            .onChange(of: cursorManualCookieHeader) { _, newValue in
+                                CursorSettings.manualCookieHeader = newValue
+                            }
+                    }
+                    .padding(.horizontal, 12)
                 }
             }
 

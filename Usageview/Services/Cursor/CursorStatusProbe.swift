@@ -27,6 +27,7 @@ struct CursorValidatedSession: Sendable {
     let cookieHeader: String
     let sourceLabel: String
     let accountInfo: CursorAccountInfo
+    let cookies: [HTTPCookie]
 }
 
 /// Discovers and validates Cursor sessions via browser cookies and API checks (CodexBar pattern).
@@ -45,7 +46,7 @@ struct CursorStatusProbe: Sendable {
 
         if let override = CookieHeaderNormalizer.normalize(manualCookieHeader) {
             log("Using manual cookie header")
-            return try await validateCookieHeader(override, sourceLabel: "manual", accountId: accountId)
+            return try await validateCookieHeader(override, sourceLabel: "manual", accountId: accountId, cookies: [])
         }
 
         if allowCachedSessions,
@@ -57,7 +58,8 @@ struct CursorStatusProbe: Sendable {
                 return try await validateCookieHeader(
                     cached.cookieHeader,
                     sourceLabel: cached.sourceLabel,
-                    accountId: accountId)
+                    accountId: accountId,
+                    cookies: [])
             } catch let error as CursorProbeError where error == .notLoggedIn {
                 CookieHeaderCache.clear(accountId: accountId)
             }
@@ -120,7 +122,8 @@ struct CursorStatusProbe: Sendable {
                     return try await validateCookieHeader(
                         cookieHeader,
                         sourceLabel: "stored session",
-                        accountId: accountId)
+                        accountId: accountId,
+                        cookies: storedCookies)
                 } catch let error as CursorProbeError where error == .notLoggedIn {
                     await CursorSessionStore.shared.clearCookies()
                     log("Stored session invalid, cleared")
@@ -158,7 +161,8 @@ struct CursorStatusProbe: Sendable {
                     let validated = try await validateCookieHeader(
                         session.cookieHeader,
                         sourceLabel: session.sourceLabel,
-                        accountId: accountId)
+                        accountId: accountId,
+                        cookies: session.cookies)
                     return validated
                 } catch let error as CursorProbeError where error == .notLoggedIn {
                     log("Cursor API rejected cookies from \(session.sourceLabel); trying next")
@@ -175,11 +179,15 @@ struct CursorStatusProbe: Sendable {
     private func validateCookieHeader(
         _ cookieHeader: String,
         sourceLabel: String,
-        accountId: UUID
+        accountId: UUID,
+        cookies: [HTTPCookie]
     ) async throws -> CursorValidatedSession {
         _ = try await fetchUsageSummary(cookieHeader: cookieHeader)
         let userInfo = try? await fetchUserInfo(cookieHeader: cookieHeader)
         CookieHeaderCache.store(accountId: accountId, cookieHeader: cookieHeader, sourceLabel: sourceLabel)
+        if !cookies.isEmpty {
+            await CursorSessionStore.shared.setCookies(cookies)
+        }
 
         let name = userInfo?.name ?? userInfo?.email
         let email = userInfo?.email
@@ -187,7 +195,8 @@ struct CursorStatusProbe: Sendable {
         return CursorValidatedSession(
             cookieHeader: cookieHeader,
             sourceLabel: sourceLabel,
-            accountInfo: CursorAccountInfo(name: displayName, email: email))
+            accountInfo: CursorAccountInfo(name: displayName, email: email),
+            cookies: cookies)
     }
 
     private func fetchUsageSummary(cookieHeader: String) async throws {
@@ -207,11 +216,6 @@ struct CursorStatusProbe: Sendable {
         guard http.statusCode == 200 else {
             throw CursorProbeError.networkError("HTTP \(http.statusCode)")
         }
-    }
-
-    private struct CursorUserInfo: Decodable {
-        let email: String?
-        let name: String?
     }
 
     private func fetchUserInfo(cookieHeader: String) async throws -> CursorUserInfo {

@@ -84,7 +84,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .codex: "Codex CLI (`codex` login → ~/.codex/auth.json)"
         case .gemini: "Google OAuth, API key, or Gemini CLI"
         case .kimi: "Kimi Code token (kimi-auth) or browser import"
-        case .cursor: "Safari sign-in at cursor.com, then import (recommended)"
+        case .cursor: "Sign in with browser or import cookies (Settings → Providers)"
         case .openrouter: "API key"
         case .kiro: "kiro-cli login (recommended)"
         case .augment: "API key (usage coming soon)"
@@ -108,6 +108,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .chatgpt, .codex: "5h"
         case .gemini: "Pro"
         case .copilot: "Premium"
+        case .cursor: "Total"
         default: "Primary"
         }
     }
@@ -119,6 +120,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .gemini: "Flash"
         case .copilot: "Chat"
         case .zai: "MCP"
+        case .cursor: "Auto"
         default: "Secondary"
         }
     }
@@ -126,6 +128,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
     func tertiaryRateLabel() -> String? {
         switch self {
         case .zai: "5h"
+        case .cursor: "API"
         default: nil
         }
     }
@@ -137,7 +140,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .chatgpt: "premium requests"
         case .gemini: "requests"
         case .kimi: "tokens"
-        case .cursor: "requests"
+        case .cursor: "% used"
         case .openrouter: "credits"
         case .kiro: "credits"
         case .augment: "credits"

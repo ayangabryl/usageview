@@ -15,16 +15,14 @@ final class CursorAuthService: Sendable {
         loadToken(key: tokenKey(for: accountId)) != nil
     }
 
-    /// Import and validate session from browsers (Safari first, then others — CodexBar order).
     func saveFromBrowser(for accountId: UUID) async throws -> CursorAccountInfo {
         let session = try await probe.fetchValidatedSession(
             accountId: accountId,
             allowCachedSessions: true,
             allowKeychainPrompt: true)
-        return saveToken(session.cookieHeader, for: accountId, sourceLabel: session.sourceLabel, accountInfo: session.accountInfo)
+        return applySession(session, for: accountId)
     }
 
-    /// Open authenticator.cursor.sh and poll until a valid session is detected.
     func runBrowserLogin(
         for accountId: UUID,
         onPhaseChange: @escaping @MainActor (CursorLoginRunner.Phase) -> Void = { _ in }
@@ -37,11 +35,7 @@ final class CursorAuthService: Sendable {
             guard let session = result.session else {
                 throw CursorProbeError.noSessionCookie
             }
-            return saveToken(
-                session.cookieHeader,
-                for: accountId,
-                sourceLabel: session.sourceLabel,
-                accountInfo: session.accountInfo)
+            return applySession(session, for: accountId)
         case .cancelled:
             throw CancellationError()
         case let .failed(message):
@@ -58,21 +52,22 @@ final class CursorAuthService: Sendable {
             manualCookieHeader: normalized,
             allowCachedSessions: false,
             allowKeychainPrompt: false)
-        return saveToken(session.cookieHeader, for: accountId, sourceLabel: "manual", accountInfo: session.accountInfo)
+        return applySession(session, for: accountId)
     }
 
-    @discardableResult
-    private func saveToken(
-        _ token: String,
+    func updateSession(
+        cookieHeader: String,
         for accountId: UUID,
-        sourceLabel: String?,
-        accountInfo: CursorAccountInfo
-    ) -> CursorAccountInfo {
-        saveTokenValue(key: tokenKey(for: accountId), value: token)
+        sourceLabel: String? = nil,
+        cookies: [HTTPCookie] = []
+    ) {
+        saveTokenValue(key: tokenKey(for: accountId), value: cookieHeader)
         if let sourceLabel {
-            CookieHeaderCache.store(accountId: accountId, cookieHeader: token, sourceLabel: sourceLabel)
+            CookieHeaderCache.store(accountId: accountId, cookieHeader: cookieHeader, sourceLabel: sourceLabel)
         }
-        return accountInfo
+        if !cookies.isEmpty {
+            Task { await CursorSessionStore.shared.setCookies(cookies) }
+        }
     }
 
     func getToken(for accountId: UUID) -> String? {
@@ -82,6 +77,15 @@ final class CursorAuthService: Sendable {
     func disconnect(accountId: UUID) {
         removeToken(key: tokenKey(for: accountId))
         CookieHeaderCache.clear(accountId: accountId)
+    }
+
+    private func applySession(_ session: CursorValidatedSession, for accountId: UUID) -> CursorAccountInfo {
+        updateSession(
+            cookieHeader: session.cookieHeader,
+            for: accountId,
+            sourceLabel: session.sourceLabel,
+            cookies: session.cookies)
+        return session.accountInfo
     }
 
     private func tokenKey(for id: UUID) -> String {
