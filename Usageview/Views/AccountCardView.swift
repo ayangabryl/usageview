@@ -13,9 +13,16 @@ struct AccountCardView: View {
     var onRemove: () -> Void = {}
     var onTap: () -> Void = {}
     var onPin: () -> Void = {}
+    var onSwitchCodexSession: () -> Void = {}
+    var onCaptureCodexSession: () -> Void = {}
+    var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
     var isPinned: Bool = false
+    var isActiveCodexSession: Bool = false
+    var canSwitchCodexSession: Bool = false
+    var canCaptureCodexSession: Bool = false
+    var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
     var canMoveDown: Bool = false
     var showWeeklyLimit: Bool = false
@@ -31,6 +38,17 @@ struct AccountCardView: View {
                     avatarURL: isConnected ? account.avatarURL : nil,
                     size: 28
                 )
+                .overlay(alignment: .bottomTrailing) {
+                    if isConnected && isActiveCodexSession {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 8, height: 8)
+                            .overlay(
+                                Circle()
+                                    .stroke(.white.opacity(0.9), lineWidth: 1)
+                            )
+                    }
+                }
 
                 if isRenaming {
                     HStack(spacing: 4) {
@@ -70,6 +88,12 @@ struct AccountCardView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+
+                        if isConnected && isActiveCodexSession {
+                            Text("Current in Codex")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.green)
+                        }
                     }
 
                     Spacer()
@@ -94,10 +118,17 @@ struct AccountCardView: View {
                             renamingId = account.id
                         },
                         onPin: onPin,
+                        onSwitchCodexSession: onSwitchCodexSession,
+                        onCaptureCodexSession: onCaptureCodexSession,
+                        onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
                         onMoveDown: onMoveDown,
                         onDisconnect: onDisconnect,
-                        onRemove: onRemove
+                        onRemove: onRemove,
+                        isActiveCodexSession: isActiveCodexSession,
+                        canSwitchCodexSession: canSwitchCodexSession,
+                        canCaptureCodexSession: canCaptureCodexSession,
+                        canEnableCodexCLI: canEnableCodexCLI
                     )
                 }
             }
@@ -514,9 +545,16 @@ struct CompactAccountRow: View {
     var onRemove: () -> Void = {}
     var onTap: () -> Void = {}
     var onPin: () -> Void = {}
+    var onSwitchCodexSession: () -> Void = {}
+    var onCaptureCodexSession: () -> Void = {}
+    var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
     var isPinned: Bool = false
+    var isActiveCodexSession: Bool = false
+    var canSwitchCodexSession: Bool = false
+    var canCaptureCodexSession: Bool = false
+    var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
     var canMoveDown: Bool = false
     var showWeeklyLimit: Bool = false
@@ -530,6 +568,17 @@ struct CompactAccountRow: View {
                 avatarURL: isConnected ? account.avatarURL : nil,
                 size: 20
             )
+            .overlay(alignment: .bottomTrailing) {
+                if isConnected && isActiveCodexSession {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 7, height: 7)
+                        .overlay(
+                            Circle()
+                                .stroke(.white.opacity(0.9), lineWidth: 1)
+                        )
+                }
+            }
 
             if isRenaming {
                 TextField("Name", text: $renameText)
@@ -564,6 +613,16 @@ struct CompactAccountRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(minWidth: 60, alignment: .leading)
+
+                if isConnected && isActiveCodexSession {
+                    Text("Current")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.green, in: Capsule())
+
+                }
 
                 if isConnected {
                     Spacer(minLength: 4)
@@ -678,10 +737,17 @@ struct CompactAccountRow: View {
                             renamingId = account.id
                         },
                         onPin: onPin,
+                        onSwitchCodexSession: onSwitchCodexSession,
+                        onCaptureCodexSession: onCaptureCodexSession,
+                        onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
                         onMoveDown: onMoveDown,
                         onDisconnect: onDisconnect,
-                        onRemove: onRemove
+                        onRemove: onRemove,
+                        isActiveCodexSession: isActiveCodexSession,
+                        canSwitchCodexSession: canSwitchCodexSession,
+                        canCaptureCodexSession: canCaptureCodexSession,
+                        canEnableCodexCLI: canEnableCodexCLI
                     )
                 } else {
                     Spacer()
@@ -774,10 +840,17 @@ struct AccountMenuButton: View {
     var onRefresh: () -> Void = {}
     var onRename: () -> Void = {}
     var onPin: () -> Void = {}
+    var onSwitchCodexSession: () -> Void = {}
+    var onCaptureCodexSession: () -> Void = {}
+    var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
     var onDisconnect: () -> Void = {}
     var onRemove: () -> Void = {}
+    var isActiveCodexSession: Bool = false
+    var canSwitchCodexSession: Bool = false
+    var canCaptureCodexSession: Bool = false
+    var canEnableCodexCLI: Bool = false
 
     var body: some View {
         Menu {
@@ -792,6 +865,17 @@ struct AccountMenuButton: View {
                 Button { onPin() } label: {
                     Label(isPinned ? "Unpin from Menu Bar" : "Pin to Menu Bar",
                           systemImage: isPinned ? "pin.slash.fill" : "pin.fill")
+                }
+                if canSwitchCodexSession {
+                    Button { onSwitchCodexSession() } label: {
+                        Label(isActiveCodexSession ? "Current in Codex" : "Switch to This in Codex",
+                              systemImage: isActiveCodexSession ? "checkmark.seal.fill" : "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(isActiveCodexSession)
+                } else if canCaptureCodexSession {
+                    Button { onCaptureCodexSession() } label: {
+                        Label("Save Codex Session for Switching", systemImage: "arrow.down.circle")
+                    }
                 }
             }
             Divider()

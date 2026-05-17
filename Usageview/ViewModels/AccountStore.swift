@@ -80,6 +80,7 @@ final class AccountStore {
     let augmentAuth: AugmentAuthService
     let jetbrainsAuth: JetBrainsAuthService
     let codexAuth: CodexAuthService
+    let codexOAuth: CodexOAuthSessionService
     let zaiAuth: ZaiAuthService
     private let githubUsage: GitHubUsageService
     private let claudeUsage: AnthropicUsageService
@@ -119,6 +120,7 @@ final class AccountStore {
         self.augmentAuth = au
         self.jetbrainsAuth = jb
         self.codexAuth = cx
+        self.codexOAuth = CodexOAuthSessionService()
         self.zaiAuth = za
         self.githubUsage = GitHubUsageService(authService: gh)
         self.claudeUsage = AnthropicUsageService(authService: cl)
@@ -797,6 +799,97 @@ final class AccountStore {
         refreshingIds.contains(account.id)
     }
 
+    func isCodexManaged(_ account: Account) -> Bool {
+        (account.serviceType == .chatgpt && account.authMethod == .codexCLI) || account.serviceType == .codex
+    }
+
+    func isCodexOAuth(_ account: Account) -> Bool {
+        account.serviceType == .chatgpt && account.authMethod == .oauth
+    }
+
+    // MARK: - CLI session helpers
+
+    func hasSavedCodexSession(for account: Account) -> Bool {
+        guard isCodexManaged(account) else { return false }
+        return codexAuth.hasSavedSession(for: account.id)
+    }
+
+    func isActiveCodexSession(for account: Account) -> Bool {
+        guard isCodexManaged(account) else { return false }
+        return codexAuth.isActiveSession(for: account.id)
+    }
+
+    /// Switch active Codex CLI session to this account. Returns localized error text on failure.
+    @discardableResult
+    func activateCodexSession(for account: Account, reopenApp: Bool = true) -> String? {
+        guard hasSavedCodexSession(for: account) else {
+            return CodexAuthError.noSavedSession.localizedDescription
+        }
+        do {
+            let info = try codexAuth.activateSession(for: account.id)
+            if let index = accounts.firstIndex(where: { $0.id == account.id }) {
+                accounts[index].username = info.name ?? accounts[index].username
+                if accounts[index].label.isEmpty, let infoName = info.name {
+                    accounts[index].label = infoName
+                }
+                save()
+            }
+            if reopenApp {
+                reopenCodexDesktopApp()
+            }
+            Task { await refreshAccount(account) }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    // MARK: - OAuth session helpers
+
+    func hasSavedCodexOAuthSession(for account: Account) -> Bool {
+        guard isCodexOAuth(account) else { return false }
+        return codexOAuth.hasSnapshot(for: account.id)
+    }
+
+    /// Capture current Codex Desktop OAuth session for this account.
+    /// Prompts for folder access via NSOpenPanel if needed.
+    /// Returns a localized error string on failure, nil on success.
+    func captureCodexOAuthSession(for account: Account) async -> String? {
+        guard account.serviceType == .chatgpt else {
+            return "This account is not a ChatGPT/OpenAI account."
+        }
+        guard let grantedURL = await codexOAuth.resolveCodexFolderWithPermission() else {
+            return nil // user cancelled — not an error
+        }
+        do {
+            try codexOAuth.captureCurrentSession(for: account.id, from: grantedURL)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Switch Codex Desktop to the saved OAuth session for this account.
+    /// Quits Codex, swaps session files, relaunches. Returns error string on failure.
+    func activateCodexOAuthSession(for account: Account) async -> String? {
+        do {
+            try await codexOAuth.activateSession(for: account.id)
+            Task { await refreshAccount(account) }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func canSwitchCodexSession(for account: Account) -> Bool {
+        hasSavedCodexSession(for: account) || hasSavedCodexOAuthSession(for: account)
+    }
+
+    func isActiveSession(for account: Account) -> Bool {
+        if isCodexManaged(account) { return isActiveCodexSession(for: account) }
+        return false
+    }
+
     /// The account whose usage drives the menu bar display.
     var menuBarAccount: Account? {
         if let pinnedId = pinnedAccountId,
@@ -971,5 +1064,23 @@ final class AccountStore {
             isStale: accounts.isEmpty || accounts.allSatisfy { !isConnected(for: $0) },
             showCheckmark: showMenuBarCheckmark
         )
+    }
+
+    private func reopenCodexDesktopApp() {
+        let workspace = NSWorkspace.shared
+        let config = NSWorkspace.OpenConfiguration()
+
+        if let codexURL = workspace.urlForApplication(withBundleIdentifier: "com.openai.chat") {
+            workspace.openApplication(at: codexURL, configuration: config, completionHandler: nil)
+            return
+        }
+        if let codexURL = workspace.urlForApplication(withBundleIdentifier: "com.openai.codex") {
+            workspace.openApplication(at: codexURL, configuration: config, completionHandler: nil)
+            return
+        }
+        let fallbackURL = URL(fileURLWithPath: "/Applications/Codex.app")
+        if FileManager.default.fileExists(atPath: fallbackURL.path) {
+            workspace.openApplication(at: fallbackURL, configuration: config, completionHandler: nil)
+        }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct CodexAccountInfo: Sendable {
     var name: String?
@@ -14,8 +15,15 @@ final class CodexAuthService: Sendable {
 
     /// Import OAuth token from `~/.codex/auth.json` (Codex CLI login).
     func connectFromCLI(for accountId: UUID) throws -> CodexAccountInfo {
-        let creds = try loadCLIAuth()
+        let snapshot = try loadCLIAuthSnapshot()
+        let creds = snapshot.credentials
         saveToken(key: tokenKey(for: accountId), value: creds.accessToken)
+        if let accountIdString = creds.accountId {
+            saveToken(key: accountIdKey(for: accountId), value: accountIdString)
+        } else {
+            removeToken(key: accountIdKey(for: accountId))
+        }
+        saveToken(key: authSnapshotKey(for: accountId), value: snapshot.rawJSONString)
         let label = creds.accountId.map { "Codex · \($0.prefix(8))…" } ?? "Codex CLI"
         return CodexAccountInfo(name: label)
     }
@@ -24,8 +32,15 @@ final class CodexAuthService: Sendable {
         if let stored = loadToken(key: tokenKey(for: accountId)) {
             return stored
         }
-        if let creds = try? loadCLIAuth() {
+        if let snapshot = try? loadCLIAuthSnapshot() {
+            let creds = snapshot.credentials
             saveToken(key: tokenKey(for: accountId), value: creds.accessToken)
+            if let accountIdString = creds.accountId {
+                saveToken(key: accountIdKey(for: accountId), value: accountIdString)
+            } else {
+                removeToken(key: accountIdKey(for: accountId))
+            }
+            saveToken(key: authSnapshotKey(for: accountId), value: snapshot.rawJSONString)
             return creds.accessToken
         }
         return nil
@@ -41,6 +56,42 @@ final class CodexAuthService: Sendable {
     func disconnect(accountId: UUID) {
         removeToken(key: tokenKey(for: accountId))
         removeToken(key: accountIdKey(for: accountId))
+        removeToken(key: authSnapshotKey(for: accountId))
+    }
+
+    func hasSavedSession(for accountId: UUID) -> Bool {
+        loadToken(key: authSnapshotKey(for: accountId)) != nil
+    }
+
+    func isActiveSession(for accountId: UUID) -> Bool {
+        guard let savedToken = loadToken(key: tokenKey(for: accountId)),
+              let currentCreds = try? loadCLIAuth()
+        else {
+            return false
+        }
+        return savedToken == currentCreds.accessToken
+    }
+
+    /// Make this account the active Codex session by restoring its saved auth.json snapshot.
+    func activateSession(for accountId: UUID) throws -> CodexAccountInfo {
+        guard let snapshotRaw = loadToken(key: authSnapshotKey(for: accountId)) else {
+            throw CodexAuthError.noSavedSession
+        }
+        guard let data = snapshotRaw.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw CodexAuthError.invalidSavedSession
+        }
+        try writeCLIAuth(json: json)
+        let creds = try loadCLIAuth()
+        saveToken(key: tokenKey(for: accountId), value: creds.accessToken)
+        if let accountIdString = creds.accountId {
+            saveToken(key: accountIdKey(for: accountId), value: accountIdString)
+        } else {
+            removeToken(key: accountIdKey(for: accountId))
+        }
+        let label = creds.accountId.map { "Codex · \($0.prefix(8))…" } ?? "Codex CLI"
+        return CodexAccountInfo(name: label)
     }
 
     // MARK: - CLI auth.json
@@ -51,15 +102,29 @@ final class CodexAuthService: Sendable {
     }
 
     func loadCLIAuth() throws -> CLICredentials {
-        let url = Self.authFileURL()
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw CodexAuthError.notFound
+        try loadCLIAuthSnapshot().credentials
+    }
+
+    private struct CLIAuthSnapshot {
+        let credentials: CLICredentials
+        let rawJSONString: String
+    }
+
+    private func loadCLIAuthSnapshot() throws -> CLIAuthSnapshot {
+        guard let url = Self.firstExistingAuthFileURL() else {
+            throw CodexAuthError.notFound(checkedPaths: Self.authFileCandidates().map(\.path))
         }
         let data = try Data(contentsOf: url)
+        guard let rawJSONString = String(data: data, encoding: .utf8) else {
+            throw CodexAuthError.invalidFile
+        }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CodexAuthError.invalidFile
         }
+        return CLIAuthSnapshot(credentials: try parseCredentials(from: json), rawJSONString: rawJSONString)
+    }
 
+    private func parseCredentials(from json: [String: Any]) throws -> CLICredentials {
         if let apiKey = json["OPENAI_API_KEY"] as? String,
            !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
@@ -76,15 +141,62 @@ final class CodexAuthService: Sendable {
         return CLICredentials(accessToken: access, accountId: accountId)
     }
 
-    private static func authFileURL() -> URL {
+    private func writeCLIAuth(json: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+        for url in Self.authFileWriteTargets() {
+            let directory = url.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Real user home directory — bypasses macOS sandbox path redirection.
+    /// `FileManager.homeDirectoryForCurrentUser` returns the container path in sandboxed apps;
+    /// `getpwuid` queries Directory Services and always returns the actual `/Users/name` path.
+    static func realHomeDirectory() -> URL {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    private static func authFileCandidates() -> [URL] {
+        var candidates: [URL] = []
         let env = ProcessInfo.processInfo.environment
         if let codexHome = env["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !codexHome.isEmpty
         {
-            return URL(fileURLWithPath: codexHome).appendingPathComponent("auth.json")
+            candidates.append(URL(fileURLWithPath: codexHome).appendingPathComponent("auth.json"))
         }
-        return FileManager.default.homeDirectoryForCurrentUser
+        let home = realHomeDirectory()
+        candidates.append(home.appendingPathComponent(".codex/auth.json"))
+        candidates.append(home.appendingPathComponent("Library/Application Support/Codex/auth.json"))
+
+        var unique: [URL] = []
+        for candidate in candidates {
+            if !unique.contains(where: { $0.path == candidate.path }) {
+                unique.append(candidate)
+            }
+        }
+        return unique
+    }
+
+    private static func firstExistingAuthFileURL() -> URL? {
+        authFileCandidates().first(where: { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    private static func authFileWriteTargets() -> [URL] {
+        var targets: [URL] = []
+        if let existing = firstExistingAuthFileURL() {
+            targets.append(existing)
+        }
+        // Always keep canonical CLI path in sync.
+        let canonical = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/auth.json")
+        if !targets.contains(where: { $0.path == canonical.path }) {
+            targets.append(canonical)
+        }
+        return targets
     }
 
     // MARK: - Keychain
@@ -97,6 +209,10 @@ final class CodexAuthService: Sendable {
         "com.ayangabryl.usage.codex-account-id-\(id.uuidString)"
     }
 
+    private func authSnapshotKey(for id: UUID) -> String {
+        "com.ayangabryl.usage.codex-auth-json-\(id.uuidString)"
+    }
+
     private func saveToken(key: String, value: String) { KeychainHelper.save(value, forKey: key) }
     private func loadToken(key: String) -> String? { KeychainHelper.load(forKey: key) }
     private func removeToken(key: String) { KeychainHelper.remove(forKey: key) }
@@ -105,18 +221,25 @@ final class CodexAuthService: Sendable {
 }
 
 enum CodexAuthError: LocalizedError {
-    case notFound
+    case notFound(checkedPaths: [String])
     case invalidFile
     case missingTokens
+    case noSavedSession
+    case invalidSavedSession
 
     var errorDescription: String? {
         switch self {
-        case .notFound:
-            "Codex auth.json not found. Run `codex` in Terminal to sign in first."
+        case .notFound(let checkedPaths):
+            let paths = checkedPaths.joined(separator: ", ")
+            return "Codex auth.json not found. Checked: \(paths). Run `codex login` in Terminal, then try import again."
         case .invalidFile:
-            "Could not read Codex auth.json."
+            return "Could not read Codex auth.json."
         case .missingTokens:
-            "Codex auth.json has no tokens. Run `codex` to sign in."
+            return "Codex auth.json has no tokens. Run `codex` to sign in."
+        case .noSavedSession:
+            return "No saved Codex session for this account. Import from Codex CLI first."
+        case .invalidSavedSession:
+            return "Saved Codex session is invalid. Re-import from Codex CLI."
         }
     }
 }

@@ -9,6 +9,7 @@ struct MenuBarContentView: View {
     @State private var renameText: String = ""
     @State private var detailTab: DetailTab = .overview
     @State private var showCostBreakdownPopover: Bool = false
+    @State private var codexSwitchError: String?
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -85,6 +86,16 @@ struct MenuBarContentView: View {
         }
         .frame(width: 320)
         .animation(.easeInOut(duration: 0.15), value: screen)
+        .alert("Couldn’t switch Codex account", isPresented: Binding(
+            get: { codexSwitchError != nil },
+            set: { isPresented in
+                if !isPresented { codexSwitchError = nil }
+            }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(codexSwitchError ?? "")
+        }
     }
 
     // MARK: - Main Screen
@@ -240,9 +251,16 @@ struct MenuBarContentView: View {
                 onRemove: { store.removeAccount(id: account.id) },
                 onTap: { navigate(to: .accountDetail(account.id)) },
                 onPin: { store.togglePinToMenuBar(account) },
+                onSwitchCodexSession: { switchCodexSession(for: account) },
+                onCaptureCodexSession: { captureCodexSession(for: account) },
+                onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
                 onMoveDown: { store.moveAccountDown(id: account.id) },
                 isPinned: store.isPinnedToMenuBar(account),
+                isActiveCodexSession: store.isActiveCodexSession(for: account),
+                canSwitchCodexSession: store.canSwitchCodexSession(for: account),
+                canCaptureCodexSession: canCaptureCodexSession(for: account),
+                canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
                 canMoveDown: store.canMoveDown(id: account.id),
                 showWeeklyLimit: store.showWeeklyLimit
@@ -283,9 +301,16 @@ struct MenuBarContentView: View {
                 onRemove: { store.removeAccount(id: account.id) },
                 onTap: { navigate(to: .accountDetail(account.id)) },
                 onPin: { store.togglePinToMenuBar(account) },
+                onSwitchCodexSession: { switchCodexSession(for: account) },
+                onCaptureCodexSession: { captureCodexSession(for: account) },
+                onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
                 onMoveDown: { store.moveAccountDown(id: account.id) },
                 isPinned: store.isPinnedToMenuBar(account),
+                isActiveCodexSession: store.isActiveCodexSession(for: account),
+                canSwitchCodexSession: store.canSwitchCodexSession(for: account),
+                canCaptureCodexSession: canCaptureCodexSession(for: account),
+                canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
                 canMoveDown: store.canMoveDown(id: account.id),
                 showWeeklyLimit: store.showWeeklyLimit
@@ -314,6 +339,44 @@ struct MenuBarContentView: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 3)
+    }
+
+    private func switchCodexSession(for account: Account) {
+        if store.isCodexManaged(account) {
+            if let error = store.activateCodexSession(for: account, reopenApp: true) {
+                codexSwitchError = error
+            }
+        } else if store.isCodexOAuth(account) {
+            Task {
+                if let error = await store.activateCodexOAuthSession(for: account) {
+                    codexSwitchError = error
+                }
+            }
+        }
+    }
+
+    private func enableCodexCLI(for account: Account) {
+        guard account.serviceType == .chatgpt && account.authMethod == .oauth,
+              let index = store.accounts.firstIndex(where: { $0.id == account.id })
+        else { return }
+        store.accounts[index].authMethod = .codexCLI
+        store.save()
+        navigate(to: .connectOpenAICodexCLI(account.id))
+    }
+
+    /// An OAuth account that is connected but has no session snapshot yet can be captured.
+    private func canCaptureCodexSession(for account: Account) -> Bool {
+        store.isCodexOAuth(account)
+        && store.isConnected(for: account)
+        && !store.hasSavedCodexOAuthSession(for: account)
+    }
+
+    private func captureCodexSession(for account: Account) {
+        Task {
+            if let error = await store.captureCodexOAuthSession(for: account) {
+                codexSwitchError = error
+            }
+        }
     }
 
     // MARK: - Pick Service Type
@@ -420,6 +483,14 @@ struct MenuBarContentView: View {
                     .tint(serviceType.accentColor)
                     .padding(.horizontal, 16)
 
+                    if serviceType == .chatgpt {
+                        Text("OAuth works for usage tracking, but quick account switching in Codex requires Codex CLI.")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+
                     // API Key option
                     Button {
                         if let index = store.accounts.firstIndex(where: { $0.id == accountId }) {
@@ -466,9 +537,9 @@ struct MenuBarContentView: View {
                         .buttonStyle(.bordered)
                         .padding(.horizontal, 16)
 
-                        Text("`codex login` in Terminal, then import ~/.codex/auth.json")
+                        Text("Best for multi-account workflow: `codex login` in Terminal, then import ~/.codex/auth.json.\nThis enables one-click “Switch to This in Codex” from account menu.")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 16)
                     }
@@ -1385,6 +1456,13 @@ struct MenuBarContentView: View {
                                             label: "Auth",
                                             value: authMethodLabel(for: account)
                                         )
+                                        if account.serviceType == .chatgpt {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(
+                                                label: "Codex Quick Switch",
+                                                value: codexQuickSwitchStatus(for: account)
+                                            )
+                                        }
                                         if let plan = account.planName {
                                             Divider().padding(.horizontal, 10)
                                             detailInfoRow(label: "Plan", value: plan)
@@ -1412,6 +1490,23 @@ struct MenuBarContentView: View {
 
                             // Actions
                             VStack(spacing: 8) {
+                                if account.serviceType == .chatgpt && account.authMethod == .oauth {
+                                    Button {
+                                        enableCodexCLI(for: account)
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "terminal")
+                                                .font(.caption)
+                                            Text("Enable Codex Quick Switch (CLI)")
+                                                .font(.subheadline.weight(.medium))
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 6)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(account.accentColor)
+                                }
+
                                 Button {
                                     Task { await store.refreshAccount(account) }
                                 } label: {
@@ -1559,6 +1654,20 @@ struct MenuBarContentView: View {
         case .apiKey: "API Key"
         case .codexCLI: "Codex CLI"
         }
+    }
+
+    private func codexQuickSwitchStatus(for account: Account) -> String {
+        guard account.serviceType == .chatgpt else { return "Not applicable" }
+        if account.authMethod == .codexCLI {
+            if store.isActiveCodexSession(for: account) {
+                return "Enabled · Current in Codex"
+            }
+            if store.hasSavedCodexSession(for: account) {
+                return "Enabled"
+            }
+            return "Not enabled yet (import needed)"
+        }
+        return "Unavailable on OAuth (use Codex CLI)"
     }
 
     private func detailUsageSource(for account: Account) -> String {
@@ -3323,7 +3432,7 @@ struct CodexInlineConnectView: View {
 
             ServiceIconView(serviceType: .chatgpt, avatarURL: nil, size: 48)
 
-            Text("OpenAI · Codex CLI\nRun `codex login` in Terminal, then import your session for 5-hour and weekly Codex usage.")
+            Text("OpenAI · Codex CLI\nRun `codex login` in Terminal, then import your session for 5-hour and weekly Codex usage.\nRepeat for each account, then use account menu → Switch to This in Codex.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
