@@ -496,14 +496,6 @@ struct MenuBarContentView: View {
                     .tint(serviceType.accentColor)
                     .padding(.horizontal, 16)
 
-                    if serviceType == .chatgpt {
-                        Text("OAuth works for usage tracking, but quick account switching in Codex requires Codex CLI.")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 16)
-                    }
-
                     // API Key option
                     Button {
                         if let index = store.accounts.firstIndex(where: { $0.id == accountId }) {
@@ -530,28 +522,7 @@ struct MenuBarContentView: View {
                     .tint(serviceType.accentColor.opacity(0.7))
                     .padding(.horizontal, 16)
 
-                    if serviceType == .chatgpt {
-                        Button {
-                            navigate(to: .connectOpenAICodexCLI(accountId))
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "terminal")
-                                    .font(.subheadline)
-                                Text("Codex CLI")
-                                    .font(.subheadline.weight(.medium))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.bordered)
-                        .padding(.horizontal, 16)
 
-                        Text("Best for multi-account workflow: `codex login` in Terminal, then import ~/.codex/auth.json.\nThis enables one-click “Switch to This in Codex” from account menu.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 16)
-                    }
                 }
             }
             .padding(.bottom, 16)
@@ -1514,23 +1485,6 @@ struct MenuBarContentView: View {
 
                             // Actions
                             VStack(spacing: 8) {
-                                if account.serviceType == .chatgpt && account.authMethod == .oauth {
-                                    Button {
-                                        enableCodexCLI(for: account)
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "terminal")
-                                                .font(.caption)
-                                            Text("Enable Codex Quick Switch (CLI)")
-                                                .font(.subheadline.weight(.medium))
-                                        }
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 6)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(account.accentColor)
-                                }
-
                                 Button {
                                     Task { await store.refreshAccount(account) }
                                 } label: {
@@ -1691,7 +1645,7 @@ struct MenuBarContentView: View {
             }
             return "Not enabled yet (import needed)"
         }
-        return "Unavailable on OAuth (use Codex CLI)"
+        return "Enabled · save session to switch accounts"
     }
 
     private func detailUsageSource(for account: Account) -> String {
