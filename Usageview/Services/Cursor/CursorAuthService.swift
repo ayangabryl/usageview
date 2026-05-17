@@ -16,12 +16,25 @@ final class CursorAuthService: Sendable {
         loadToken(key: tokenKey(for: accountId)) != nil
     }
 
+    /// Import session cookies from Safari / Chrome / Arc (no manual copy-paste).
+    func saveFromBrowser(for accountId: UUID) throws -> CursorAccountInfo {
+        let session = try CursorCookieImporter.importSession()
+        return saveToken(session.cookieHeader, for: accountId, sourceLabel: session.sourceLabel)
+    }
+
     /// Store the user-provided session token (from browser Cookie header)
     func saveToken(_ token: String, for accountId: UUID) -> CursorAccountInfo {
+        saveToken(token, for: accountId, sourceLabel: nil)
+    }
+
+    private func saveToken(_ token: String, for accountId: UUID, sourceLabel: String?) -> CursorAccountInfo {
         saveTokenValue(key: tokenKey(for: accountId), value: token)
-        let masked = token.count > 12
-            ? String(token.prefix(12)) + "..."
-            : token
+        let masked: String
+        if let sourceLabel {
+            masked = sourceLabel
+        } else {
+            masked = token.count > 12 ? String(token.prefix(12)) + "..." : token
+        }
         return CursorAccountInfo(name: masked)
     }
 

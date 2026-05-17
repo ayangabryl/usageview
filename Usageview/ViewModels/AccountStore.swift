@@ -635,7 +635,17 @@ final class AccountStore {
         case .kiro:
             if let usage = await kiroUsage.fetchStatus(for: account.id) {
                 if let index = accounts.firstIndex(where: { $0.id == account.id }) {
-                    accounts[index].usageUnit = usage.isActive ? "Connected" : "Inactive"
+                    if usage.hasQuotaData {
+                        accounts[index].currentUsage = usage.creditsPercent
+                        accounts[index].usageLimit = 100
+                        accounts[index].usageUnit = "% used"
+                        accounts[index].planName = usage.planName
+                        if let reset = usage.resetsAt {
+                            accounts[index].resetDate = reset
+                        }
+                    } else {
+                        accounts[index].usageUnit = usage.isActive ? "Connected" : "Inactive"
+                    }
                     save()
                 }
             }

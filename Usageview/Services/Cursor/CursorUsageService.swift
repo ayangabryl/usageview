@@ -39,25 +39,30 @@ final class CursorUsageService: Sendable {
     }
 
     private func fetchUsageSummary(token: String) async -> CursorUsageData? {
-        guard let url = URL(string: "https://www.cursor.com/api/usage-summary") else { return nil }
+        let baseURLs = ["https://cursor.com", "https://www.cursor.com"]
+        for base in baseURLs {
+            if let usage = await fetchUsageSummary(token: token, baseURL: base) {
+                return usage
+            }
+        }
+        return nil
+    }
+
+    private func fetchUsageSummary(token: String, baseURL: String) async -> CursorUsageData? {
+        guard let url = URL(string: "\(baseURL)/api/usage-summary") else { return nil }
 
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Token can be a Cookie header value or a raw session token
-        if token.contains("=") {
-            request.setValue(token, forHTTPHeaderField: "Cookie")
-        } else {
-            request.setValue("WorkosCursorSessionToken=\(token)", forHTTPHeaderField: "Cookie")
-        }
-        request.setValue("https://www.cursor.com", forHTTPHeaderField: "Origin")
-        request.setValue("https://www.cursor.com/settings", forHTTPHeaderField: "Referer")
+        applySessionCookie(token, to: &request)
+        request.setValue(baseURL, forHTTPHeaderField: "Origin")
+        request.setValue("\(baseURL)/settings", forHTTPHeaderField: "Referer")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return nil }
-
-            guard http.statusCode == 200 else {
-                logger.info("Cursor usage-summary: HTTP \(http.statusCode)")
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                if let http = response as? HTTPURLResponse {
+                    logger.info("Cursor usage-summary (\(baseURL)): HTTP \(http.statusCode)")
+                }
                 return nil
             }
 
@@ -75,16 +80,26 @@ final class CursorUsageService: Sendable {
                 let formatter = ISO8601DateFormatter()
                 formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                 result.billingCycleEnd = formatter.date(from: cycleEnd)
+                    ?? ISO8601DateFormatter().date(from: cycleEnd)
             }
 
             if let individualUsage = json["individualUsage"] as? [String: Any],
-               let plan = individualUsage["plan"] as? [String: Any] {
+               let plan = individualUsage["plan"] as? [String: Any]
+            {
                 result.usedCents = (plan["used"] as? Double) ?? 0
                 result.limitCents = (plan["limit"] as? Double) ?? 0
 
                 if let onDemand = individualUsage["onDemand"] as? [String: Any] {
                     result.onDemandUsedCents = (onDemand["used"] as? Double) ?? 0
                 }
+            }
+
+            if let teamUsage = json["teamUsage"] as? [String: Any],
+               let plan = teamUsage["plan"] as? [String: Any],
+               result.limitCents == 0
+            {
+                result.usedCents = (plan["used"] as? Double) ?? result.usedCents
+                result.limitCents = (plan["limit"] as? Double) ?? 0
             }
 
             return result
@@ -95,15 +110,20 @@ final class CursorUsageService: Sendable {
     }
 
     private func verifySession(token: String) async -> CursorUsageData? {
-        guard let url = URL(string: "https://www.cursor.com/api/auth/me") else { return nil }
+        for base in ["https://cursor.com", "https://www.cursor.com"] {
+            if let session = await verifySession(token: token, baseURL: base) {
+                return session
+            }
+        }
+        return nil
+    }
+
+    private func verifySession(token: String, baseURL: String) async -> CursorUsageData? {
+        guard let url = URL(string: "\(baseURL)/api/auth/me") else { return nil }
 
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if token.contains("=") {
-            request.setValue(token, forHTTPHeaderField: "Cookie")
-        } else {
-            request.setValue("WorkosCursorSessionToken=\(token)", forHTTPHeaderField: "Cookie")
-        }
+        applySessionCookie(token, to: &request)
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -113,6 +133,14 @@ final class CursorUsageService: Sendable {
             return CursorUsageData(isActive: true)
         } catch {
             return nil
+        }
+    }
+
+    private func applySessionCookie(_ token: String, to request: inout URLRequest) {
+        if token.contains("=") {
+            request.setValue(token, forHTTPHeaderField: "Cookie")
+        } else {
+            request.setValue("WorkosCursorSessionToken=\(token)", forHTTPHeaderField: "Cookie")
         }
     }
 }

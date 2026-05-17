@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AA000003SPARKLE00000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA000002SPARKLE00000002 /* Sparkle */; };
+		AA000004SCKIT00000004 /* SweetCookieKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA000006SCKIT00000006 /* SweetCookieKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA000003SPARKLE00000003 /* Sparkle in Frameworks */,
+				AA000004SCKIT00000004 /* SweetCookieKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -79,6 +81,7 @@
 			name = Usageview;
 			packageProductDependencies = (
 				AA000002SPARKLE00000002 /* Sparkle */,
+				AA000006SCKIT00000006 /* SweetCookieKit */,
 			);
 			productName = Usageview;
 			productReference = 54B185972F59CD0E0013A3ED /* Usageview.app */;
@@ -110,6 +113,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AA000001SPARKLE00000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				AA000005SCKIT00000005 /* XCRemoteSwiftPackageReference "SweetCookieKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 54B185982F59CD0E0013A3ED /* Products */;
@@ -389,6 +393,14 @@
 				minimumVersion = 2.6.0;
 			};
 		};
+		AA000005SCKIT00000005 /* XCRemoteSwiftPackageReference "SweetCookieKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/steipete/SweetCookieKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -396,6 +408,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA000001SPARKLE00000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		AA000006SCKIT00000006 /* SweetCookieKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA000005SCKIT00000005 /* XCRemoteSwiftPackageReference "SweetCookieKit" */;
+			productName = SweetCookieKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

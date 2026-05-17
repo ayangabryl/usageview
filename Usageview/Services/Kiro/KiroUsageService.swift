@@ -5,6 +5,15 @@ private let logger = Logger(subsystem: "com.ayangabryl.usage", category: "KiroUs
 
 struct KiroUsageData: Sendable {
     var isActive: Bool
+    var planName: String?
+    var creditsUsed: Double = 0
+    var creditsTotal: Double = 0
+    var creditsPercent: Double = 0
+    var resetsAt: Date?
+
+    var hasQuotaData: Bool {
+        creditsTotal > 0 || creditsPercent > 0
+    }
 }
 
 @MainActor
@@ -15,9 +24,23 @@ final class KiroUsageService: Sendable {
         self.authService = authService
     }
 
-    /// For now, just verify the token is stored. Future: call kiro-cli /usage
     func fetchStatus(for accountId: UUID) async -> KiroUsageData? {
-        guard authService.getAPIKey(for: accountId) != nil else { return nil }
-        return KiroUsageData(isActive: true)
+        if let snapshot = await KiroCLIUsageProbe.fetchUsage() {
+            logger.info("Kiro CLI: \(snapshot.creditsPercent, privacy: .public)% credits")
+            return KiroUsageData(
+                isActive: true,
+                planName: snapshot.planName,
+                creditsUsed: snapshot.creditsUsed,
+                creditsTotal: snapshot.creditsTotal,
+                creditsPercent: snapshot.creditsPercent,
+                resetsAt: snapshot.resetsAt
+            )
+        }
+
+        if authService.getAPIKey(for: accountId) != nil || KiroCLIUsageProbe.isCLIAvailable() {
+            return KiroUsageData(isActive: KiroCLIUsageProbe.isCLIAvailable())
+        }
+
+        return nil
     }
 }

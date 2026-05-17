@@ -15,13 +15,29 @@ final class KimiAuthService: Sendable {
         loadToken(key: apiKey(for: accountId)) != nil
     }
 
+    /// Import kimi-auth from a browser where you are signed in at kimi.com.
+    func saveFromBrowser(for accountId: UUID) throws -> KimiAccountInfo {
+        let session = try KimiCookieImporter.importSession()
+        guard let token = session.authToken else {
+            throw KimiCookieImportError.noCookies
+        }
+        return saveAPIKey(token, for: accountId, sourceLabel: session.sourceLabel)
+    }
+
     /// Store the user-provided API key
     func saveAPIKey(_ key: String, for accountId: UUID) -> KimiAccountInfo {
+        saveAPIKey(key, for: accountId, sourceLabel: nil)
+    }
+
+    private func saveAPIKey(_ key: String, for accountId: UUID, sourceLabel: String?) -> KimiAccountInfo {
         saveToken(key: apiKey(for: accountId), value: key)
         // Mask the key for display: show first 8 chars + "..."
-        let masked = key.count > 8
-            ? String(key.prefix(8)) + "..."
-            : key
+        let masked: String
+        if let sourceLabel {
+            masked = sourceLabel
+        } else {
+            masked = key.count > 8 ? String(key.prefix(8)) + "..." : key
+        }
         return KimiAccountInfo(name: masked)
     }
 

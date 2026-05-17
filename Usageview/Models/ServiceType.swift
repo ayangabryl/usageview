@@ -63,15 +63,15 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
 
     var authDescription: String {
         switch self {
-        case .claude: "OAuth or API key"
-        case .copilot: "Device flow sign-in"
-        case .chatgpt: "OAuth or API key"
-        case .gemini: "Gemini CLI or API key"
-        case .kimi: "API key"
-        case .cursor: "Session token"
+        case .claude: "OAuth, API key, or Claude Code CLI"
+        case .copilot: "GitHub device sign-in"
+        case .chatgpt: "OpenAI device sign-in or API key"
+        case .gemini: "Google OAuth, API key, or Gemini CLI"
+        case .kimi: "Kimi Code token (kimi-auth) or Moonshot API key"
+        case .cursor: "Browser session cookie"
         case .openrouter: "API key"
-        case .kiro: "API key"
-        case .augment: "API key"
+        case .kiro: "kiro-cli login (recommended)"
+        case .augment: "API key (usage coming soon)"
         case .jetbrainsAI: "Auto-detect from IDE"
         }
     }

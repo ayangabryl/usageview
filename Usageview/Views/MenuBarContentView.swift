@@ -2231,6 +2231,7 @@ struct KimiInlineConnectView: View {
     let onDone: (KimiAccountInfo?) -> Void
     @State private var apiKey: String = ""
     @State private var errorMessage: String?
+    @State private var isImportingFromBrowser = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -2238,14 +2239,52 @@ struct KimiInlineConnectView: View {
 
             ServiceIconView(serviceType: .kimi, avatarURL: nil, size: 48)
 
-            Text("Enter your Moonshot API key\nto connect Kimi AI.")
+            Text("Import from a browser where you’re signed in at kimi.com,\nor paste your kimi-auth token manually.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
+            Button {
+                isImportingFromBrowser = true
+                errorMessage = nil
+                Task {
+                    do {
+                        let info = try authService.saveFromBrowser(for: accountId)
+                        onDone(info)
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                    isImportingFromBrowser = false
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isImportingFromBrowser {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "globe")
+                            .font(.subheadline)
+                    }
+                    Text(isImportingFromBrowser ? "Reading browser cookies…" : "Import from browser")
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(ServiceType.kimi.accentColor)
+            .disabled(isImportingFromBrowser)
+            .padding(.horizontal, 16)
+
+            Text("Safari works without extra prompts. Chrome and Arc may ask for Keychain access once — choose Always Allow.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+
             VStack(alignment: .leading, spacing: 4) {
-                SecureField("sk-...", text: $apiKey)
+                SecureField("Or paste kimi-auth JWT…", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
 
@@ -2260,24 +2299,23 @@ struct KimiInlineConnectView: View {
             Button {
                 let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else {
-                    errorMessage = "Please enter an API key."
+                    errorMessage = "Please enter a token."
                     return
                 }
                 let info = authService.saveAPIKey(trimmed, for: accountId)
                 onDone(info)
             } label: {
-                Text("Connect")
+                Text("Connect with pasted token")
                     .font(.subheadline.weight(.medium))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(ServiceType.kimi.accentColor)
-            .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .buttonStyle(.bordered)
+            .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImportingFromBrowser)
             .padding(.horizontal, 16)
 
-            Link(destination: URL(string: "https://platform.moonshot.cn/console/api-keys")!) {
-                Text("Get an API key →")
+            Link(destination: URL(string: "https://www.kimi.com/code/console")!) {
+                Text("Open Kimi Code console →")
                     .font(.caption)
                     .foregroundStyle(.blue)
             }
@@ -2505,6 +2543,7 @@ struct CursorInlineConnectView: View {
     let onDone: (CursorAccountInfo?) -> Void
     @State private var token: String = ""
     @State private var errorMessage: String?
+    @State private var isImportingFromBrowser = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -2512,14 +2551,52 @@ struct CursorInlineConnectView: View {
 
             ServiceIconView(serviceType: .cursor, avatarURL: nil, size: 48)
 
-            Text("Paste your Cursor session token\nfrom your browser cookies.")
+            Text("Import from a browser where you’re signed in at cursor.com,\nor paste a session cookie manually.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
+            Button {
+                isImportingFromBrowser = true
+                errorMessage = nil
+                Task {
+                    do {
+                        let info = try authService.saveFromBrowser(for: accountId)
+                        onDone(info)
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                    isImportingFromBrowser = false
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isImportingFromBrowser {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "globe")
+                            .font(.subheadline)
+                    }
+                    Text(isImportingFromBrowser ? "Reading browser cookies…" : "Import from browser")
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(ServiceType.cursor.accentColor)
+            .disabled(isImportingFromBrowser)
+            .padding(.horizontal, 16)
+
+            Text("Safari works without extra prompts. Chrome and Arc may ask for Keychain access once — choose Always Allow.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+
             VStack(alignment: .leading, spacing: 4) {
-                SecureField("WorkosCursorSessionToken=...", text: $token)
+                SecureField("Or paste cookie header…", text: $token)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
 
@@ -2540,20 +2617,20 @@ struct CursorInlineConnectView: View {
                 let info = authService.saveToken(trimmed, for: accountId)
                 onDone(info)
             } label: {
-                Text("Connect")
+                Text("Connect with pasted token")
                     .font(.subheadline.weight(.medium))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(ServiceType.cursor.accentColor)
-            .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .buttonStyle(.bordered)
+            .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImportingFromBrowser)
             .padding(.horizontal, 16)
 
-            Text("Open cursor.com → DevTools → Application\n→ Cookies → WorkosCursorSessionToken")
+            Text("Manual: cursor.com → DevTools → Cookies → WorkosCursorSessionToken or full Cookie header.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
 
             Spacer().frame(height: 4)
         }
@@ -2672,7 +2749,6 @@ struct KiroInlineConnectView: View {
     let authService: KiroAuthService
     let accountId: UUID
     let onDone: (KiroAccountInfo?) -> Void
-    @State private var apiKey: String = ""
     @State private var errorMessage: String?
 
     var body: some View {
@@ -2681,47 +2757,40 @@ struct KiroInlineConnectView: View {
 
             ServiceIconView(serviceType: .kiro, avatarURL: nil, size: 48)
 
-            Text("Enter your Kiro API key\nto track usage.")
+            Text("Usageview reads quotas from your local\nkiro-cli login (same as CodexBar).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
-            VStack(alignment: .leading, spacing: 4) {
-                SecureField("API key...", text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
 
             Button {
-                let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    errorMessage = "Please enter an API key."
-                    return
+                if let info = authService.linkCLI(for: accountId) {
+                    onDone(info)
+                } else {
+                    errorMessage = "Install kiro-cli and run “kiro-cli login” first."
                 }
-                let info = authService.saveAPIKey(trimmed, for: accountId)
-                onDone(info)
             } label: {
-                Text("Connect")
+                Text("Use kiro-cli")
                     .font(.subheadline.weight(.medium))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
             .tint(ServiceType.kiro.accentColor)
-            .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .padding(.horizontal, 16)
 
-            Text("Usage tracking is status-only for now.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            Link(destination: URL(string: "https://kiro.dev/docs/cli")!) {
+                Text("Install kiro-cli →")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
 
             Spacer().frame(height: 4)
         }

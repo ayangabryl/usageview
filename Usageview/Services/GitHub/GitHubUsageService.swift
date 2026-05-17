@@ -52,9 +52,9 @@ final class GitHubUsageService: Sendable {
         request.setValue("token \(token)", forHTTPHeaderField: "Authorization")
         // Editor spoofing headers — required by the Copilot internal API
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("vscode/1.96.2", forHTTPHeaderField: "Editor-Version")
-        request.setValue("copilot-chat/0.26.7", forHTTPHeaderField: "Editor-Plugin-Version")
-        request.setValue("GitHubCopilotChat/0.26.7", forHTTPHeaderField: "User-Agent")
+        request.setValue("vscode/1.99.3", forHTTPHeaderField: "Editor-Version")
+        request.setValue("copilot-chat/0.27.2", forHTTPHeaderField: "Editor-Plugin-Version")
+        request.setValue("GitHubCopilotChat/0.27.2", forHTTPHeaderField: "User-Agent")
         request.setValue("2025-04-01", forHTTPHeaderField: "X-Github-Api-Version")
 
         do {
