@@ -34,7 +34,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .kiro: "Kiro"
         case .augment: "Augment"
         case .jetbrainsAI: "JetBrains AI"
-        case .zai: "Z.ai (GLM)"
+        case .zai: "Z.ai"
         }
     }
 
@@ -56,12 +56,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
     }
 
     /// SF Symbol when no bundled logo exists
-    var symbolName: String? {
-        switch self {
-        case .zai: "sparkles"
-        default: nil
-        }
-    }
+    var symbolName: String? { nil }
 
     var accentColor: Color {
         switch self {
@@ -76,7 +71,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .kiro: Color(hex: "#FF9900")
         case .augment: Color(hex: "#7C3AED")
         case .jetbrainsAI: Color(hex: "#FE315D")
-        case .zai: Color(hex: "#2563EB")
+        case .zai: Color(hex: "#1F63EC")
         }
     }
 
@@ -93,7 +88,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .kiro: "kiro-cli login (recommended)"
         case .augment: "API key (usage coming soon)"
         case .jetbrainsAI: "Auto-detect from IDE"
-        case .zai: "Z.ai / GLM API key (Global or BigModel CN)"
+        case .zai: "Z.ai API key (Global or BigModel CN)"
         }
     }
 

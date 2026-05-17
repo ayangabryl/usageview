@@ -3393,7 +3393,7 @@ struct CodexInlineConnectView: View {
     }
 }
 
-// MARK: - Z.ai / GLM Inline Connect
+// MARK: - Z.ai Inline Connect
 
 struct ZaiInlineConnectView: View {
     let authService: ZaiAuthService
@@ -3409,7 +3409,7 @@ struct ZaiInlineConnectView: View {
 
             ServiceIconView(serviceType: .zai, avatarURL: nil, size: 48)
 
-            Text("Enter your Z.ai / GLM API key. Usage shows token, MCP, and short-window quotas from the BigModel API.")
+            Text("Enter your Z.ai API key. Usage shows token, MCP, and short-window quotas.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

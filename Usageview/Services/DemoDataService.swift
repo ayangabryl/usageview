@@ -82,7 +82,7 @@ enum DemoDataService {
         case .zai:
             return DemoSnapshot(
                 username: "demo@z.ai",
-                planName: "GLM Coding Plan",
+                planName: "Coding Plan",
                 currentUsage: 55.0,
                 usageLimit: 100,
                 usageUnit: "% used",
