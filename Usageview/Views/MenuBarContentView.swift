@@ -2948,14 +2948,26 @@ struct CursorInlineConnectView: View {
             .disabled(isConnecting)
             .padding(.horizontal, 16)
 
-            Button {
-                SystemSettingsLinks.openFullDiskAccess()
-            } label: {
-                Label("Safari? Open Full Disk Access Settings", systemImage: "externaldrive.fill.badge.checkmark")
-                    .font(.caption)
+            HStack(spacing: 12) {
+                Button {
+                    importFromChrome()
+                } label: {
+                    Label("Select Chrome Cookies…", systemImage: "chevron.right.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.blue)
+                .disabled(isConnecting)
+
+                Button {
+                    SystemSettingsLinks.openFullDiskAccess()
+                } label: {
+                    Label("Safari? Full Disk Access", systemImage: "externaldrive.fill.badge.checkmark")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.blue)
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.blue)
 
             VStack(alignment: .leading, spacing: 4) {
                 SecureField("Or paste cookie header…", text: $token)
@@ -3044,6 +3056,40 @@ struct CursorInlineConnectView: View {
             isConnecting = false
             loginStatus = nil
             loginTask = nil
+        }
+    }
+
+    private func importFromChrome() {
+        let panel = NSOpenPanel()
+        panel.message = "Select your Chrome 'Cookies' file (in your Chrome Default profile folder)."
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = false
+        panel.nameFieldStringValue = "Cookies"
+        if let suggested = CursorCookieImporter.chromeDefaultCookiesURL {
+            panel.directoryURL = suggested.deletingLastPathComponent()
+        }
+        guard panel.runModal() == .OK, let fileURL = panel.url else { return }
+        let accessing = fileURL.startAccessingSecurityScopedResource()
+        isConnecting = true
+        errorMessage = nil
+        loginStatus = "Reading selected Chrome Cookies file…"
+        loginTask = Task { @MainActor in
+            defer {
+                if accessing { fileURL.stopAccessingSecurityScopedResource() }
+                isConnecting = false
+                loginStatus = nil
+                loginTask = nil
+            }
+            do {
+                let info = try await authService.saveFromChromeFile(fileURL, for: accountId)
+                guard !Task.isCancelled else { return }
+                onDone(info)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

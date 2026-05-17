@@ -23,6 +23,17 @@ final class CursorAuthService: Sendable {
         return applySession(session, for: accountId)
     }
 
+    /// Import from a specific Chrome `Cookies` file picked via NSOpenPanel.
+    func saveFromChromeFile(_ fileURL: URL, for accountId: UUID) async throws -> CursorAccountInfo {
+        let sessions = CursorCookieImporter.importSessionsFromCookiesFile(fileURL)
+        guard !sessions.isEmpty else {
+            throw CursorProbeError.noSessionCookie(
+                details: "No cursor.com session cookies found in the selected file.\n\nMake sure you're signed in to cursor.com in Chrome, then select the Cookies file from your Chrome Default profile.")
+        }
+        let session = try await probe.validateSessions(sessions, accountId: accountId)
+        return applySession(session, for: accountId)
+    }
+
     func runBrowserLogin(
         for accountId: UUID,
         onPhaseChange: @escaping @MainActor (CursorLoginRunner.Phase) -> Void = { _ in }

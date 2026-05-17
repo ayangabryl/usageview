@@ -138,6 +138,34 @@ struct CursorStatusProbe: Sendable {
             chromeSkipped: chromeSkipped))
     }
 
+    /// Validate a pre-built list of sessions (e.g. from a user-selected file).
+    func validateSessions(
+        _ sessions: [CursorCookieImporter.SessionInfo],
+        accountId: UUID,
+        logger: ((String) -> Void)? = nil
+    ) async throws -> CursorValidatedSession {
+        let log: (String) -> Void = { msg in logger?("[cursor] \(msg)") }
+        var apiRejected: [String] = []
+        for session in sessions {
+            log("Trying Cursor session from \(session.sourceLabel)")
+            do {
+                return try await validateCookieHeader(
+                    session.cookieHeader,
+                    sourceLabel: session.sourceLabel,
+                    accountId: accountId,
+                    cookies: session.cookies)
+            } catch let error as CursorProbeError where error == .notLoggedIn {
+                apiRejected.append(session.sourceLabel)
+                log("Cursor API rejected cookies from \(session.sourceLabel)")
+            } catch {
+                log("Cursor fetch failed: \(error.localizedDescription)")
+                throw error
+            }
+        }
+        throw CursorProbeError.noSessionCookie(
+            details: "Cursor API rejected the session cookies from the selected file. Make sure you're signed in to cursor.com in Chrome first.")
+    }
+
     private func scanBrowsers(
         _ browsers: [Browser],
         accountId: UUID,
