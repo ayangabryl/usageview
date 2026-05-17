@@ -137,7 +137,8 @@ struct Account: Codable, Identifiable, Sendable {
         case (.gemini, .apiKey): return true
         case (.claude, .apiKey), (.chatgpt, .apiKey): return true
         case (.chatgpt, .oauth): return !hasChatGPTUsage
-        case (.codex, _): return !hasCodexUsage
+        case (.chatgpt, .codexCLI): return !hasCodexCLIUsage
+        case (.codex, _): return !hasCodexCLIUsage
         case (.zai, _): return !hasZaiQuota
         case (.kimi, _): return !hasKimiBilling
         case (.cursor, _): return !hasCursorUsage
@@ -163,8 +164,13 @@ struct Account: Codable, Identifiable, Sendable {
     var hasDualWindows: Bool {
         switch serviceType {
         case .codex:
-            return hasCodexUsage && sevenDayUsage != nil
-        case .claude, .chatgpt, .gemini:
+            return hasCodexCLIUsage && sevenDayUsage != nil
+        case .chatgpt:
+            if authMethod == .codexCLI {
+                return hasCodexCLIUsage && sevenDayUsage != nil
+            }
+            return authMethod == .oauth && fiveHourUsage != nil && sevenDayUsage != nil
+        case .claude, .gemini:
             return authMethod == .oauth && fiveHourUsage != nil && sevenDayUsage != nil
         default:
             return false
@@ -191,8 +197,10 @@ struct Account: Codable, Identifiable, Sendable {
         serviceType == .chatgpt && authMethod == .oauth && fiveHourUsage != nil
     }
 
-    var hasCodexUsage: Bool {
-        serviceType == .codex && fiveHourUsage != nil
+    var hasCodexCLIUsage: Bool {
+        (serviceType == .chatgpt && authMethod == .codexCLI) || serviceType == .codex
+            ? fiveHourUsage != nil
+            : false
     }
 
     var hasZaiQuota: Bool {

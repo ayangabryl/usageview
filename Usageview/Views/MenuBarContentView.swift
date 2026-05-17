@@ -30,7 +30,7 @@ struct MenuBarContentView: View {
         case connectKiro(UUID)
         case connectAugment(UUID)
         case connectJetBrains(UUID)
-        case connectCodex(UUID)
+        case connectOpenAICodexCLI(UUID)
         case connectZai(UUID)
         case accountDetail(UUID)
     }
@@ -75,8 +75,8 @@ struct MenuBarContentView: View {
                 augmentConnectView(accountId: id)
             case .connectJetBrains(let id):
                 jetbrainsConnectView(accountId: id)
-            case .connectCodex(let id):
-                codexConnectView(accountId: id)
+            case .connectOpenAICodexCLI(let id):
+                openAICodexCLIConnectView(accountId: id)
             case .connectZai(let id):
                 zaiConnectView(accountId: id)
             case .accountDetail(let id):
@@ -217,7 +217,7 @@ struct MenuBarContentView: View {
                         navigate(to: account.authMethod == .apiKey ? .connectClaudeAPIKey(account.id) : .connectClaude(account.id))
                     case .copilot: navigate(to: .connectGitHub(account.id))
                     case .chatgpt:
-                        navigate(to: account.authMethod == .apiKey ? .connectOpenAIAPIKey(account.id) : .connectOpenAI(account.id))
+                        navigate(to: openAIConnectScreen(for: account))
                     case .gemini:
                         navigate(to: account.authMethod == .apiKey ? .connectGeminiAPIKey(account.id) : .connectGemini(account.id))
                     case .kimi: navigate(to: .connectKimi(account.id))
@@ -226,7 +226,8 @@ struct MenuBarContentView: View {
                     case .kiro: navigate(to: .connectKiro(account.id))
                     case .augment: navigate(to: .connectAugment(account.id))
                     case .jetbrainsAI: navigate(to: .connectJetBrains(account.id))
-                    case .codex: navigate(to: .connectCodex(account.id))
+                    case .codex:
+                        navigate(to: .connectOpenAICodexCLI(account.id))
                     case .zai: navigate(to: .connectZai(account.id))
                     }
                 },
@@ -259,7 +260,7 @@ struct MenuBarContentView: View {
                         navigate(to: account.authMethod == .apiKey ? .connectClaudeAPIKey(account.id) : .connectClaude(account.id))
                     case .copilot: navigate(to: .connectGitHub(account.id))
                     case .chatgpt:
-                        navigate(to: account.authMethod == .apiKey ? .connectOpenAIAPIKey(account.id) : .connectOpenAI(account.id))
+                        navigate(to: openAIConnectScreen(for: account))
                     case .gemini:
                         navigate(to: account.authMethod == .apiKey ? .connectGeminiAPIKey(account.id) : .connectGemini(account.id))
                     case .kimi: navigate(to: .connectKimi(account.id))
@@ -268,7 +269,8 @@ struct MenuBarContentView: View {
                     case .kiro: navigate(to: .connectKiro(account.id))
                     case .augment: navigate(to: .connectAugment(account.id))
                     case .jetbrainsAI: navigate(to: .connectJetBrains(account.id))
-                    case .codex: navigate(to: .connectCodex(account.id))
+                    case .codex:
+                        navigate(to: .connectOpenAICodexCLI(account.id))
                     case .zai: navigate(to: .connectZai(account.id))
                     }
                 },
@@ -288,6 +290,14 @@ struct MenuBarContentView: View {
                 canMoveDown: store.canMoveDown(id: account.id),
                 showWeeklyLimit: store.showWeeklyLimit
             )
+        }
+    }
+
+    private func openAIConnectScreen(for account: Account) -> Screen {
+        switch account.authMethod {
+        case .apiKey: .connectOpenAIAPIKey(account.id)
+        case .codexCLI: .connectOpenAICodexCLI(account.id)
+        case .oauth: .connectOpenAI(account.id)
         }
     }
 
@@ -315,7 +325,7 @@ struct MenuBarContentView: View {
             }
 
             VStack(spacing: 8) {
-                ForEach(ServiceType.allCases, id: \.self) { type in
+                ForEach(ServiceType.addableCases, id: \.self) { type in
                     Button {
                         if type.supportsMultipleAuthMethods {
                             // Show auth method picker before creating account
@@ -324,7 +334,7 @@ struct MenuBarContentView: View {
                         } else {
                             let account = store.addAccount(
                                 serviceType: type,
-                                authMethod: (type == .copilot || type == .codex) ? .oauth : .apiKey
+                                authMethod: type == .copilot ? .oauth : .apiKey
                             )
                             switch type {
                             case .copilot: navigate(to: .connectGitHub(account.id))
@@ -334,9 +344,8 @@ struct MenuBarContentView: View {
                             case .kiro: navigate(to: .connectKiro(account.id))
                             case .augment: navigate(to: .connectAugment(account.id))
                             case .jetbrainsAI: navigate(to: .connectJetBrains(account.id))
-                            case .codex: navigate(to: .connectCodex(account.id))
                             case .zai: navigate(to: .connectZai(account.id))
-                            case .claude, .chatgpt, .gemini: break // handled above
+                            case .claude, .chatgpt, .gemini, .codex: break // handled above
                             }
                         }
                     } label: {
@@ -436,6 +445,33 @@ struct MenuBarContentView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(serviceType.accentColor.opacity(0.7))
                     .padding(.horizontal, 16)
+
+                    if serviceType == .chatgpt {
+                        Button {
+                            if let index = store.accounts.firstIndex(where: { $0.id == accountId }) {
+                                store.accounts[index].authMethod = .codexCLI
+                                store.save()
+                            }
+                            navigate(to: .connectOpenAICodexCLI(accountId))
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "terminal")
+                                    .font(.subheadline)
+                                Text("Codex CLI")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.bordered)
+                        .padding(.horizontal, 16)
+
+                        Text("`codex login` in Terminal, then import ~/.codex/auth.json")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
                 }
             }
             .padding(.bottom, 16)
@@ -807,7 +843,7 @@ struct MenuBarContentView: View {
         )
     }
 
-    private func codexConnectView(accountId: UUID) -> some View {
+    private func openAICodexCLIConnectView(accountId: UUID) -> some View {
         CodexInlineConnectView(
             authService: store.codexAuth,
             accountId: accountId,
@@ -1304,7 +1340,7 @@ struct MenuBarContentView: View {
                                 .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
 
                                 HStack(spacing: 8) {
-                                    if let dashboardURL = account.serviceType.dashboardURL {
+                                    if let dashboardURL = account.serviceType.dashboardURL(authMethod: account.authMethod) {
                                         Button {
                                             NSWorkspace.shared.open(dashboardURL)
                                         } label: {
@@ -1347,7 +1383,7 @@ struct MenuBarContentView: View {
                                         Divider().padding(.horizontal, 10)
                                         detailInfoRow(
                                             label: "Auth",
-                                            value: account.authMethod == .oauth ? "OAuth" : "API Key"
+                                            value: authMethodLabel(for: account)
                                         )
                                         if let plan = account.planName {
                                             Divider().padding(.horizontal, 10)
@@ -1517,6 +1553,14 @@ struct MenuBarContentView: View {
         .padding(.vertical, 7)
     }
 
+    private func authMethodLabel(for account: Account) -> String {
+        switch account.authMethod {
+        case .oauth: "OAuth"
+        case .apiKey: "API Key"
+        case .codexCLI: "Codex CLI"
+        }
+    }
+
     private func detailUsageSource(for account: Account) -> String {
         switch (account.serviceType, account.authMethod) {
         case (.claude, .oauth):
@@ -1527,6 +1571,8 @@ struct MenuBarContentView: View {
             return "OpenAI OAuth usage API"
         case (.chatgpt, .apiKey):
             return "OpenAI API key"
+        case (.chatgpt, .codexCLI):
+            return "Codex CLI · chatgpt.com/codex/usage"
         case (.gemini, .oauth):
             return "Gemini CLI credentials"
         case (.gemini, .apiKey):
@@ -1549,13 +1595,17 @@ struct MenuBarContentView: View {
             return "Codex CLI OAuth · chatgpt.com/wham/usage"
         case (.zai, _):
             return "Z.ai quota API (api.z.ai / open.bigmodel.cn)"
+        case (_, .codexCLI):
+            return "Codex CLI · chatgpt.com/codex/usage"
         }
     }
 
     private func usageCycleLabel(for account: Account) -> String {
         switch account.serviceType {
         case .claude, .chatgpt, .codex:
-            return "5-hour and weekly rolling windows"
+            return account.authMethod == .codexCLI || account.serviceType == .codex
+                ? "Codex 5-hour and weekly windows"
+                : "5-hour and weekly rolling windows"
         case .zai:
             return "Token, MCP, and short-window quotas"
         case .copilot:
@@ -1606,13 +1656,13 @@ struct MenuBarContentView: View {
     }
 
     private func detailCreditsLabel(for account: Account) -> String? {
-        if account.serviceType == .chatgpt,
+        if account.serviceType == .chatgpt || account.serviceType == .codex,
            let unlimited = account.openAICreditsUnlimited,
            unlimited
         {
             return "Unlimited"
         }
-        if account.serviceType == .chatgpt,
+        if account.serviceType == .chatgpt || account.serviceType == .codex,
            let balance = account.openAICreditsBalance
         {
             return String(format: "$%.2f balance", balance)
@@ -3271,9 +3321,9 @@ struct CodexInlineConnectView: View {
         VStack(spacing: 16) {
             navHeader
 
-            ServiceIconView(serviceType: .codex, avatarURL: nil, size: 48)
+            ServiceIconView(serviceType: .chatgpt, avatarURL: nil, size: 48)
 
-            Text("Sign in with Codex CLI first (`codex` in Terminal), then import your session here for 5-hour and weekly usage.")
+            Text("OpenAI · Codex CLI\nRun `codex login` in Terminal, then import your session for 5-hour and weekly Codex usage.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -3309,7 +3359,7 @@ struct CodexInlineConnectView: View {
                 .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .tint(ServiceType.codex.accentColor)
+            .tint(ServiceType.chatgpt.accentColor)
             .disabled(isConnecting)
             .padding(.horizontal, 16)
 
@@ -3333,7 +3383,7 @@ struct CodexInlineConnectView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Text("Connect Codex")
+            Text("OpenAI · Codex CLI")
                 .font(.headline)
             Spacer()
         }

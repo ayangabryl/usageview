@@ -4,6 +4,10 @@ import SwiftUI
 // MARK: - Service Type
 
 enum ServiceType: String, Codable, CaseIterable, Sendable {
+    /// Providers listed in Add Account (Codex CLI is under OpenAI).
+    static var addableCases: [ServiceType] {
+        allCases.filter { $0 != .codex }
+    }
     case claude
     case copilot
     case chatgpt
@@ -80,8 +84,8 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         switch self {
         case .claude: "OAuth, API key, or Claude Code CLI"
         case .copilot: "GitHub device sign-in"
-        case .chatgpt: "OpenAI device sign-in or API key"
-        case .codex: "Codex CLI (`codex` login → ~/.codex/auth.json)"
+        case .chatgpt: "ChatGPT sign-in, API key, or Codex CLI"
+        case .codex: "Codex CLI (legacy — use OpenAI → Codex CLI)"
         case .gemini: "Google OAuth, API key, or Gemini CLI"
         case .kimi: "Kimi Code token (kimi-auth) or browser import"
         case .cursor: "Sign in with browser or import cookies (Settings → Providers)"
@@ -97,7 +101,8 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
     var supportsMultipleAuthMethods: Bool {
         switch self {
         case .claude, .chatgpt, .gemini: true
-        case .copilot, .codex, .kimi, .cursor, .openrouter, .kiro, .augment, .jetbrainsAI, .zai: false
+        case .copilot, .kimi, .cursor, .openrouter, .kiro, .augment, .jetbrainsAI, .zai: false
+        case .codex: false
         }
     }
 
@@ -163,10 +168,11 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    var dashboardURL: URL? {
+    func dashboardURL(authMethod: AuthMethod = .oauth) -> URL? {
         let urlString: String = switch self {
         case .claude: "https://claude.ai/settings/billing"
         case .copilot: "https://github.com/settings/copilot"
+        case .chatgpt where authMethod == .codexCLI: "https://chatgpt.com/codex/settings/usage"
         case .chatgpt: "https://platform.openai.com/settings/organization/usage"
         case .codex: "https://chatgpt.com/codex/settings/usage"
         case .gemini: "https://aistudio.google.com/"

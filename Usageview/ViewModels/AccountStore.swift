@@ -169,6 +169,18 @@ final class AccountStore {
               let decoded = try? JSONDecoder().decode([Account].self, from: data)
         else { return }
         accounts = decoded
+        migrateLegacyCodexAccountsIfNeeded()
+    }
+
+    /// Codex is tracked under OpenAI (Codex CLI auth method).
+    private func migrateLegacyCodexAccountsIfNeeded() {
+        var migrated = false
+        for index in accounts.indices where accounts[index].serviceType == .codex {
+            accounts[index].serviceType = .chatgpt
+            accounts[index].authMethod = .codexCLI
+            migrated = true
+        }
+        if migrated { save() }
     }
 
     // MARK: - Account Management
@@ -196,7 +208,7 @@ final class AccountStore {
         switch account.serviceType {
         case .claude: claudeAuth.disconnect(accountId: id)
         case .copilot: githubAuth.disconnect(accountId: id)
-        case .chatgpt: openaiAuth.disconnect(accountId: id)
+        case .chatgpt: disconnectOpenAI(accountId: id, authMethod: account.authMethod)
         case .gemini: geminiAuth.disconnect(accountId: id)
         case .kimi: kimiAuth.disconnect(accountId: id)
         case .cursor: cursorAuth.disconnect(accountId: id)
@@ -218,7 +230,7 @@ final class AccountStore {
         switch account.serviceType {
         case .claude: claudeAuth.disconnect(accountId: id)
         case .copilot: githubAuth.disconnect(accountId: id)
-        case .chatgpt: openaiAuth.disconnect(accountId: id)
+        case .chatgpt: disconnectOpenAI(accountId: id, authMethod: account.authMethod)
         case .gemini: geminiAuth.disconnect(accountId: id)
         case .kimi: kimiAuth.disconnect(accountId: id)
         case .cursor: cursorAuth.disconnect(accountId: id)
@@ -486,6 +498,10 @@ final class AccountStore {
 
         case .chatgpt:
             storeLogger.info("ChatGPT refresh: authMethod=\(account.authMethod.rawValue, privacy: .public) id=\(account.id)")
+            if account.authMethod == .codexCLI {
+                await refreshCodexCLIUsage(for: account)
+                return
+            }
             if account.authMethod == .apiKey {
                 // API key: verify it's still valid
                 let valid = await openaiAuth.verifyAPIKey(for: account.id)
@@ -710,27 +726,9 @@ final class AccountStore {
             }
 
         case .codex:
-            if let usage = await codexUsage.fetchUsage(for: account.id) {
-                if let index = accounts.firstIndex(where: { $0.id == account.id }) {
-                    accounts[index].planName = usage.planName.capitalized
-                    if let fiveHour = usage.fiveHourUsedPercent {
-                        accounts[index].fiveHourUsage = Double(fiveHour)
-                        accounts[index].fiveHourResetDate = usage.fiveHourResetAt
-                        accounts[index].currentUsage = Double(fiveHour)
-                        accounts[index].usageLimit = 100
-                        accounts[index].usageUnit = "% used"
-                        if let reset = usage.fiveHourResetAt {
-                            accounts[index].resetDate = reset
-                        }
-                    }
-                    if let weekly = usage.weeklyUsedPercent {
-                        accounts[index].sevenDayUsage = Double(weekly)
-                        accounts[index].sevenDayResetDate = usage.weeklyResetAt
-                    }
-                    accounts[index].openAICreditsBalance = usage.creditsBalance
-                    accounts[index].openAICreditsUnlimited = usage.creditsUnlimited
-                    save()
-                }
+            migrateLegacyCodexAccountsIfNeeded()
+            if let migrated = accounts.first(where: { $0.id == account.id }) {
+                await refreshAccount(migrated)
             }
 
         case .zai:
@@ -778,7 +776,11 @@ final class AccountStore {
         switch account.serviceType {
         case .claude: claudeAuth.isAuthenticated(for: account.id)
         case .copilot: githubAuth.isAuthenticated(for: account.id)
-        case .chatgpt: openaiAuth.isAuthenticated(for: account.id)
+        case .chatgpt:
+            switch account.authMethod {
+            case .codexCLI: codexAuth.isAuthenticated(for: account.id)
+            case .oauth, .apiKey: openaiAuth.isAuthenticated(for: account.id)
+            }
         case .gemini: geminiAuth.isAuthenticated(for: account.id)
         case .kimi: kimiAuth.isAuthenticated(for: account.id)
         case .cursor: cursorAuth.isAuthenticated(for: account.id)
@@ -816,8 +818,40 @@ final class AccountStore {
     }
 
     /// Accounts grouped by service type
+    private func disconnectOpenAI(accountId: UUID, authMethod: AuthMethod) {
+        switch authMethod {
+        case .codexCLI:
+            codexAuth.disconnect(accountId: accountId)
+        case .oauth, .apiKey:
+            openaiAuth.disconnect(accountId: accountId)
+        }
+    }
+
+    private func refreshCodexCLIUsage(for account: Account) async {
+        guard let usage = await codexUsage.fetchUsage(for: account.id) else { return }
+        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+        accounts[index].planName = usage.planName.capitalized
+        if let fiveHour = usage.fiveHourUsedPercent {
+            accounts[index].fiveHourUsage = Double(fiveHour)
+            accounts[index].fiveHourResetDate = usage.fiveHourResetAt
+            accounts[index].currentUsage = Double(fiveHour)
+            accounts[index].usageLimit = 100
+            accounts[index].usageUnit = "% used"
+            if let reset = usage.fiveHourResetAt {
+                accounts[index].resetDate = reset
+            }
+        }
+        if let weekly = usage.weeklyUsedPercent {
+            accounts[index].sevenDayUsage = Double(weekly)
+            accounts[index].sevenDayResetDate = usage.weeklyResetAt
+        }
+        accounts[index].openAICreditsBalance = usage.creditsBalance
+        accounts[index].openAICreditsUnlimited = usage.creditsUnlimited
+        save()
+    }
+
     var groupedAccounts: [(ServiceType, [Account])] {
-        let types = ServiceType.allCases
+        let types = ServiceType.addableCases
         return types.compactMap { type in
             let matching = accounts.filter { $0.serviceType == type }
             return matching.isEmpty ? nil : (type, matching)
