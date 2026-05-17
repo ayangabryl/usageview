@@ -3,9 +3,14 @@ import SweetCookieKit
 
 typealias BrowserCookieImportOrder = [Browser]
 
-extension [Browser] {
+extension BrowserCookieImportOrder {
+    /// Safari first, then SweetCookieKit default order (CodexBar `cursorCookieImportOrder`).
+    static var cursorCookieImportOrder: BrowserCookieImportOrder {
+        [.safari] + Browser.defaultImportOrder.filter { $0 != .safari }
+    }
+
     func cookieImportCandidates(allowKeychainPrompt: Bool = false) -> [Browser] {
-        self.filter { browser in
+        filter { browser in
             if KeychainAccessGate.isDisabled, browser.usesKeychainForCookieDecryption {
                 return false
             }
@@ -13,7 +18,7 @@ extension [Browser] {
         }
     }
 
-    /// Safari first for user-initiated import (no Chromium Keychain prompt).
+    /// Safari first for user-initiated import (avoids Chromium Keychain prompt when possible).
     static func userActionImportOrder() -> [Browser] {
         var order = Browser.defaultImportOrder
         if let index = order.firstIndex(of: .safari) {

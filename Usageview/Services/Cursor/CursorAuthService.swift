@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 struct CursorAccountInfo: Sendable {
     var name: String?
@@ -10,52 +9,84 @@ struct CursorAccountInfo: Sendable {
 @MainActor
 final class CursorAuthService: Sendable {
 
-    // MARK: - Multi-Account Auth
+    private let probe = CursorStatusProbe()
 
     func isAuthenticated(for accountId: UUID) -> Bool {
         loadToken(key: tokenKey(for: accountId)) != nil
     }
 
-    /// Import session cookies from Safari (recommended — no Chrome Keychain prompt).
-    func saveFromBrowser(for accountId: UUID) throws -> CursorAccountInfo {
-        let session = try CursorCookieImporter.importSession(allowKeychainPrompt: true)
-        return saveToken(session.cookieHeader, for: accountId, sourceLabel: session.sourceLabel)
+    /// Import and validate session from browsers (Safari first, then others — CodexBar order).
+    func saveFromBrowser(for accountId: UUID) async throws -> CursorAccountInfo {
+        let session = try await probe.fetchValidatedSession(
+            accountId: accountId,
+            allowCachedSessions: true,
+            allowKeychainPrompt: true)
+        return saveToken(session.cookieHeader, for: accountId, sourceLabel: session.sourceLabel, accountInfo: session.accountInfo)
     }
 
-    /// Store the user-provided session token (from browser Cookie header)
-    func saveToken(_ token: String, for accountId: UUID) -> CursorAccountInfo {
-        saveToken(token, for: accountId, sourceLabel: nil)
-    }
+    /// Open authenticator.cursor.sh and poll until a valid session is detected.
+    func runBrowserLogin(
+        for accountId: UUID,
+        onPhaseChange: @escaping @MainActor (CursorLoginRunner.Phase) -> Void = { _ in }
+    ) async throws -> CursorAccountInfo {
+        let runner = CursorLoginRunner(accountId: accountId)
+        let result = await runner.run(onPhaseChange: onPhaseChange)
 
-    private func saveToken(_ token: String, for accountId: UUID, sourceLabel: String?) -> CursorAccountInfo {
-        saveTokenValue(key: tokenKey(for: accountId), value: token)
-        let masked: String
-        if let sourceLabel {
-            masked = sourceLabel
-        } else {
-            masked = token.count > 12 ? String(token.prefix(12)) + "..." : token
+        switch result.outcome {
+        case .success:
+            guard let session = result.session else {
+                throw CursorProbeError.noSessionCookie
+            }
+            return saveToken(
+                session.cookieHeader,
+                for: accountId,
+                sourceLabel: session.sourceLabel,
+                accountInfo: session.accountInfo)
+        case .cancelled:
+            throw CancellationError()
+        case let .failed(message):
+            throw CursorProbeError.networkError(message)
         }
-        return CursorAccountInfo(name: masked)
     }
 
-    /// Retrieve the stored session token
+    func saveToken(_ token: String, for accountId: UUID) async throws -> CursorAccountInfo {
+        guard let normalized = CookieHeaderNormalizer.normalize(token) else {
+            throw CursorProbeError.networkError("Invalid cookie header")
+        }
+        let session = try await probe.fetchValidatedSession(
+            accountId: accountId,
+            manualCookieHeader: normalized,
+            allowCachedSessions: false,
+            allowKeychainPrompt: false)
+        return saveToken(session.cookieHeader, for: accountId, sourceLabel: "manual", accountInfo: session.accountInfo)
+    }
+
+    @discardableResult
+    private func saveToken(
+        _ token: String,
+        for accountId: UUID,
+        sourceLabel: String?,
+        accountInfo: CursorAccountInfo
+    ) -> CursorAccountInfo {
+        saveTokenValue(key: tokenKey(for: accountId), value: token)
+        if let sourceLabel {
+            CookieHeaderCache.store(accountId: accountId, cookieHeader: token, sourceLabel: sourceLabel)
+        }
+        return accountInfo
+    }
+
     func getToken(for accountId: UUID) -> String? {
         loadToken(key: tokenKey(for: accountId))
     }
 
     func disconnect(accountId: UUID) {
         removeToken(key: tokenKey(for: accountId))
+        CookieHeaderCache.clear(accountId: accountId)
     }
-
-    // MARK: - Key Helpers
 
     private func tokenKey(for id: UUID) -> String {
         "com.ayangabryl.usage.cursor-token-\(id.uuidString)"
     }
-
-    // MARK: - Keychain Storage
-
-    // MARK: - Keychain Storage
 
     private func saveTokenValue(key: String, value: String) { KeychainHelper.save(value, forKey: key) }
     private func loadToken(key: String) -> String? { KeychainHelper.load(forKey: key) }

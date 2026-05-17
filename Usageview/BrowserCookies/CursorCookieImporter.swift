@@ -5,23 +5,30 @@ import SweetCookieKit
 enum CursorCookieImportError: LocalizedError {
     case noSessionCookie
     case keychainAccessDisabled
+    case safariNeedsFullDiskAccess
 
     var errorDescription: String? {
         switch self {
         case .noSessionCookie:
             [
-                "No Cursor session found in Safari.",
-                "",
-                "Open Safari, sign in at cursor.com, then tap Import from Safari again.",
-                "Or paste WorkosCursorSessionToken from Safari Web Inspector → Cookies.",
-            ].joined(separator: "\n")
+                "No Cursor session found in \(BrowserCookieImportOrder.cursorCookieImportOrder.loginHint).",
+                "Sign in at cursor.com, grant Usageview Full Disk Access if you use Safari, or use Sign in with browser.",
+            ].joined(separator: " ")
         case .keychainAccessDisabled:
             "Browser import is off because “Stop password popups” is enabled in Settings. Paste your cookie manually, or turn that off and try again."
+        case .safariNeedsFullDiskAccess:
+            [
+                "Usageview needs Full Disk Access to read Safari cookies (macOS blocks the read even when Safari is signed in).",
+                "",
+                "1. Open System Settings → Privacy & Security → Full Disk Access",
+                "2. Turn ON Usageview (unlock with your Mac password if asked)",
+                "3. Quit and reopen Usageview, then try again",
+            ].joined(separator: "\n")
         }
     }
 }
 
-/// Imports Cursor session cookies from installed browsers (CodexBar-style).
+/// Imports Cursor session cookies from browsers (CodexBar `CursorCookieImporter` pattern).
 enum CursorCookieImporter {
     private static let cookieClient = BrowserCookieClient()
     private static let sessionCookieNames: Set<String> = [
@@ -50,6 +57,31 @@ enum CursorCookieImporter {
         }
     }
 
+    static func importSessionsIfPresent(
+        browser: Browser,
+        allowKeychainPrompt: Bool = false,
+        logger: ((String) -> Void)? = nil
+    ) throws -> [SessionInfo] {
+        try importCookiesFromBrowser(
+            browser: browser,
+            requireKnownSessionName: true,
+            allowKeychainPrompt: allowKeychainPrompt,
+            logger: logger)
+    }
+
+    static func importDomainCookieSessionsIfPresent(
+        browser: Browser,
+        allowKeychainPrompt: Bool = false,
+        logger: ((String) -> Void)? = nil
+    ) throws -> [SessionInfo] {
+        try importCookiesFromBrowser(
+            browser: browser,
+            requireKnownSessionName: false,
+            allowKeychainPrompt: allowKeychainPrompt,
+            logger: logger)
+    }
+
+    /// Quick import without API validation (prefer ``CursorStatusProbe``).
     static func importSession(
         allowKeychainPrompt: Bool = false,
         logger: ((String) -> Void)? = nil
@@ -58,52 +90,61 @@ enum CursorCookieImporter {
             throw CursorCookieImportError.keychainAccessDisabled
         }
 
-        let browsers: [Browser] = allowKeychainPrompt
-            ? [.safari].cookieImportCandidates(allowKeychainPrompt: true)
-            : Browser.defaultImportOrder.cookieImportCandidates()
+        let browsers = BrowserCookieImportOrder.cursorCookieImportOrder
+            .cookieImportCandidates(allowKeychainPrompt: allowKeychainPrompt)
+
+        var lastBrowserError: Error?
+
         for browser in browsers {
-            if let session = importSessionsIfPresent(
-                browser: browser,
-                allowKeychainPrompt: allowKeychainPrompt,
-                logger: logger
-            ).first {
-                return session
+            do {
+                if let session = try importSessionsIfPresent(
+                    browser: browser,
+                    allowKeychainPrompt: allowKeychainPrompt,
+                    logger: logger).first
+                {
+                    return session
+                }
+                if let session = try importDomainCookieSessionsIfPresent(
+                    browser: browser,
+                    allowKeychainPrompt: allowKeychainPrompt,
+                    logger: logger).first
+                {
+                    return session
+                }
+            } catch {
+                lastBrowserError = error
+                if allowKeychainPrompt, browser == .safari {
+                    throw mapSafariError(error)
+                }
             }
         }
-        for browser in browsers {
-            if let session = importDomainCookieSessionsIfPresent(
-                browser: browser,
-                allowKeychainPrompt: allowKeychainPrompt,
-                logger: logger
-            ).first {
-                return session
-            }
+
+        if let lastBrowserError, allowKeychainPrompt {
+            throw mapSafariError(lastBrowserError)
         }
         throw CursorCookieImportError.noSessionCookie
     }
 
-    private static func importSessionsIfPresent(
-        browser: Browser,
-        allowKeychainPrompt: Bool,
-        logger: ((String) -> Void)?
-    ) -> [SessionInfo] {
-        importCookiesFromBrowser(
-            browser: browser,
-            requireKnownSessionName: true,
-            allowKeychainPrompt: allowKeychainPrompt,
-            logger: logger)
-    }
-
-    private static func importDomainCookieSessionsIfPresent(
-        browser: Browser,
-        allowKeychainPrompt: Bool,
-        logger: ((String) -> Void)?
-    ) -> [SessionInfo] {
-        importCookiesFromBrowser(
-            browser: browser,
-            requireKnownSessionName: false,
-            allowKeychainPrompt: allowKeychainPrompt,
-            logger: logger)
+    static func mapSafariError(_ error: Error) -> Error {
+        if let cookieError = error as? BrowserCookieError {
+            switch cookieError {
+            case .accessDenied(.safari, _):
+                return CursorCookieImportError.safariNeedsFullDiskAccess
+            case let .loadFailed(.safari, details)
+                where details.localizedCaseInsensitiveContains("full disk")
+                    || details.localizedCaseInsensitiveContains("not readable"):
+                return CursorCookieImportError.safariNeedsFullDiskAccess
+            default:
+                break
+            }
+        }
+        let text = error.localizedDescription
+        if text.localizedCaseInsensitiveContains("full disk")
+            || text.localizedCaseInsensitiveContains("not readable")
+        {
+            return CursorCookieImportError.safariNeedsFullDiskAccess
+        }
+        return error
     }
 
     private static func importCookiesFromBrowser(
@@ -111,41 +152,46 @@ enum CursorCookieImporter {
         requireKnownSessionName: Bool,
         allowKeychainPrompt: Bool,
         logger: ((String) -> Void)?
-    ) -> [SessionInfo] {
+    ) throws -> [SessionInfo] {
         let log: (String) -> Void = { msg in logger?("[cursor-cookie] \(msg)") }
         guard BrowserCookieAccessGate.shouldAttempt(browser, allowKeychainPrompt: allowKeychainPrompt) else {
             return []
         }
 
+        let query = BrowserCookieQuery(domains: cookieDomains)
+        let sources: [BrowserCookieStoreRecords]
         do {
-            let query = BrowserCookieQuery(domains: cookieDomains)
-            let sources = try cookieClient.gatedRecords(
+            sources = try cookieClient.gatedRecords(
                 matching: query,
                 in: browser,
                 allowKeychainPrompt: allowKeychainPrompt,
                 logger: log)
-            var sessions: [SessionInfo] = []
-            for source in sources where !source.records.isEmpty {
-                let httpCookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
-                let hasNamedSession = httpCookies.contains { sessionCookieNames.contains($0.name) }
-                if hasNamedSession, requireKnownSessionName {
-                    log("Found \(httpCookies.count) Cursor cookies in \(source.label)")
-                    sessions.append(SessionInfo(cookies: httpCookies, sourceLabel: source.label))
-                    continue
-                }
-                if !requireKnownSessionName, !httpCookies.isEmpty {
-                    log("Found \(httpCookies.count) Cursor domain cookies in \(source.label)")
-                    sessions.append(SessionInfo(
-                        cookies: httpCookies,
-                        sourceLabel: "\(source.label) (domain cookies)"))
-                }
-            }
-            return sessions
         } catch {
             BrowserCookieAccessGate.recordIfNeeded(error)
-            log("\(browser.displayName) cookie import failed: \(error.localizedDescription)")
-            return []
+            throw error
         }
+
+        if sources.isEmpty, browser == .safari {
+            log("Safari returned no cookie stores — Full Disk Access may be required for Usageview")
+        }
+
+        var sessions: [SessionInfo] = []
+        for source in sources where !source.records.isEmpty {
+            let httpCookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
+            let hasNamedSession = httpCookies.contains { sessionCookieNames.contains($0.name) }
+            if hasNamedSession, requireKnownSessionName {
+                log("Found \(httpCookies.count) Cursor cookies in \(source.label)")
+                sessions.append(SessionInfo(cookies: httpCookies, sourceLabel: source.label))
+                continue
+            }
+            if !requireKnownSessionName, !httpCookies.isEmpty {
+                log("Found \(httpCookies.count) Cursor domain cookies in \(source.label)")
+                sessions.append(SessionInfo(
+                    cookies: httpCookies,
+                    sourceLabel: "\(source.label) (domain cookies)"))
+            }
+        }
+        return sessions
     }
 }
 #endif

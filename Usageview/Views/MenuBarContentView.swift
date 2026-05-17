@@ -2675,7 +2675,8 @@ struct CursorInlineConnectView: View {
     let onDone: (CursorAccountInfo?) -> Void
     @State private var token: String = ""
     @State private var errorMessage: String?
-    @State private var isImportingFromBrowser = false
+    @State private var isConnecting = false
+    @State private var loginStatus: String?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -2683,34 +2684,32 @@ struct CursorInlineConnectView: View {
 
             ServiceIconView(serviceType: .cursor, avatarURL: nil, size: 48)
 
-            Text("Sign in at cursor.com in Safari, then tap Import below.\nSafari avoids the extra Keychain prompts that Chrome needs.")
+            Text("Sign in with your browser (recommended), import cookies from Safari or Chrome, or paste a session token.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
+            if let loginStatus {
+                Text(loginStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+            }
+
             Button {
-                isImportingFromBrowser = true
-                errorMessage = nil
-                Task {
-                    do {
-                        let info = try authService.saveFromBrowser(for: accountId)
-                        onDone(info)
-                    } catch {
-                        errorMessage = error.localizedDescription
-                    }
-                    isImportingFromBrowser = false
-                }
+                startBrowserLogin()
             } label: {
                 HStack(spacing: 6) {
-                    if isImportingFromBrowser {
+                    if isConnecting {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Image(systemName: "safari")
+                        Image(systemName: "globe")
                             .font(.subheadline)
                     }
-                    Text(isImportingFromBrowser ? "Reading Safari cookies…" : "Import from Safari")
+                    Text(isConnecting ? "Waiting for sign-in…" : "Sign in with browser")
                         .font(.subheadline.weight(.medium))
                 }
                 .frame(maxWidth: .infinity)
@@ -2718,14 +2717,29 @@ struct CursorInlineConnectView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(ServiceType.cursor.accentColor)
-            .disabled(isImportingFromBrowser)
+            .disabled(isConnecting)
             .padding(.horizontal, 16)
 
-            Text("You can keep using Chrome for Cursor day to day — only Safari needs your cursor.com login for this one-time import.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
+            Button {
+                importFromBrowsers()
+            } label: {
+                Text(isConnecting ? "Importing…" : "Import from browsers")
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.bordered)
+            .disabled(isConnecting)
+            .padding(.horizontal, 16)
+
+            Button {
+                SystemSettingsLinks.openFullDiskAccess()
+            } label: {
+                Label("Safari? Open Full Disk Access Settings", systemImage: "externaldrive.fill.badge.checkmark")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.blue)
 
             VStack(alignment: .leading, spacing: 4) {
                 SecureField("Or paste cookie header…", text: $token)
@@ -2736,18 +2750,22 @@ struct CursorInlineConnectView: View {
                     Text(errorMessage)
                         .font(.caption2)
                         .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if errorMessage.localizedCaseInsensitiveContains("full disk") {
+                        Button("Open Full Disk Access Settings") {
+                            SystemSettingsLinks.openFullDiskAccess()
+                        }
+                        .font(.caption2)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.blue)
+                    }
                 }
             }
             .padding(.horizontal, 16)
 
             Button {
-                let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    errorMessage = "Please enter a session token."
-                    return
-                }
-                let info = authService.saveToken(trimmed, for: accountId)
-                onDone(info)
+                connectWithPastedToken()
             } label: {
                 Text("Connect with pasted token")
                     .font(.subheadline.weight(.medium))
@@ -2755,10 +2773,10 @@ struct CursorInlineConnectView: View {
                     .padding(.vertical, 8)
             }
             .buttonStyle(.bordered)
-            .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImportingFromBrowser)
+            .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting)
             .padding(.horizontal, 16)
 
-            Text("Manual fallback: Safari → Develop → Show Web Inspector → Storage → Cookies → WorkosCursorSessionToken.")
+            Text("Manual: copy the Cookie header from DevTools, or WorkosCursorSessionToken from Safari Web Inspector.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -2767,6 +2785,74 @@ struct CursorInlineConnectView: View {
             Spacer().frame(height: 4)
         }
         .padding(.bottom, 12)
+    }
+
+    private func startBrowserLogin() {
+        isConnecting = true
+        errorMessage = nil
+        loginStatus = "Opening Cursor sign-in in your browser…"
+        Task {
+            do {
+                let info = try await authService.runBrowserLogin(for: accountId) { phase in
+                    loginStatus = Self.loginStatusText(for: phase)
+                }
+                onDone(info)
+            } catch is CancellationError {
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isConnecting = false
+            loginStatus = nil
+        }
+    }
+
+    private func importFromBrowsers() {
+        isConnecting = true
+        errorMessage = nil
+        loginStatus = "Reading browser cookies and validating with Cursor…"
+        Task {
+            do {
+                let info = try await authService.saveFromBrowser(for: accountId)
+                onDone(info)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isConnecting = false
+            loginStatus = nil
+        }
+    }
+
+    private func connectWithPastedToken() {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorMessage = "Please enter a session token or Cookie header."
+            return
+        }
+        isConnecting = true
+        errorMessage = nil
+        Task {
+            do {
+                let info = try await authService.saveToken(trimmed, for: accountId)
+                onDone(info)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isConnecting = false
+        }
+    }
+
+    private static func loginStatusText(for phase: CursorLoginRunner.Phase) -> String {
+        switch phase {
+        case .loading:
+            "Preparing sign-in…"
+        case .waitingLogin:
+            "Complete sign-in in your browser. Usageview will detect it automatically."
+        case .success:
+            "Connected."
+        case let .failed(message):
+            message
+        }
     }
 
     private var navHeader: some View {

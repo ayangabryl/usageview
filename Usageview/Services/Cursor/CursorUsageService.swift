@@ -30,7 +30,7 @@ final class CursorUsageService: Sendable {
         guard let token = authService.getToken(for: accountId) else { return nil }
 
         // Try /api/usage-summary first
-        if let usage = await fetchUsageSummary(token: token) {
+        if let usage = await fetchUsageSummary(token: token, accountId: accountId) {
             return usage
         }
 
@@ -38,17 +38,17 @@ final class CursorUsageService: Sendable {
         return await verifySession(token: token)
     }
 
-    private func fetchUsageSummary(token: String) async -> CursorUsageData? {
+    private func fetchUsageSummary(token: String, accountId: UUID) async -> CursorUsageData? {
         let baseURLs = ["https://cursor.com", "https://www.cursor.com"]
         for base in baseURLs {
-            if let usage = await fetchUsageSummary(token: token, baseURL: base) {
+            if let usage = await fetchUsageSummary(token: token, baseURL: base, accountId: accountId) {
                 return usage
             }
         }
         return nil
     }
 
-    private func fetchUsageSummary(token: String, baseURL: String) async -> CursorUsageData? {
+    private func fetchUsageSummary(token: String, baseURL: String, accountId: UUID) async -> CursorUsageData? {
         guard let url = URL(string: "\(baseURL)/api/usage-summary") else { return nil }
 
         var request = URLRequest(url: url)
@@ -59,10 +59,14 @@ final class CursorUsageService: Sendable {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                if let http = response as? HTTPURLResponse {
-                    logger.info("Cursor usage-summary (\(baseURL)): HTTP \(http.statusCode)")
-                }
+            guard let http = response as? HTTPURLResponse else { return nil }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                CookieHeaderCache.clear(accountId: accountId)
+                logger.info("Cursor usage-summary (\(baseURL)): session expired (HTTP \(http.statusCode))")
+                return nil
+            }
+            guard http.statusCode == 200 else {
+                logger.info("Cursor usage-summary (\(baseURL)): HTTP \(http.statusCode)")
                 return nil
             }
 
