@@ -74,25 +74,14 @@ struct AccountCardView: View {
                         .buttonStyle(.plain)
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 5) {
-                            Text(isConnected
-                                ? (account.label.isEmpty
-                                    ? (account.username ?? account.serviceType.displayName)
-                                    : account.label)
-                                : account.serviceType.displayName)
-                                .font(.subheadline.weight(.medium))
-                                .lineLimit(1)
-
-                            if isConnected && isActiveCodexSession {
-                                Text("Active in Codex")
-                                    .font(.system(size: 8, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 2)
-                                    .background(.green, in: Capsule())
-                            }
-                        }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(isConnected
+                            ? (account.label.isEmpty
+                                ? (account.username ?? account.serviceType.displayName)
+                                : account.label)
+                            : account.serviceType.displayName)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
 
                         if isConnected, (account.username != nil || !account.label.isEmpty) {
                             Text(account.serviceType.displayName)
@@ -619,15 +608,6 @@ struct CompactAccountRow: View {
                     .truncationMode(.tail)
                     .frame(minWidth: 60, alignment: .leading)
 
-                if isConnected && isActiveCodexSession {
-                    Text("Current")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(.green, in: Capsule())
-
-                }
 
                 if isConnected {
                     Spacer(minLength: 4)
