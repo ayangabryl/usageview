@@ -81,6 +81,60 @@ enum KeychainPromptFixer {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Keychain Access.app"))
     }
 
+    /// Re-saves GitHub/Cursor/etc. tokens so macOS stops asking on every launch.
+    /// User may see one dialog per saved account — choose **Always Allow** each time.
+    @MainActor
+    static func repairSavedAccountTokens() -> (fixed: Int, total: Int) {
+        let keys = KeychainHelper.listUsageviewAccounts()
+        guard !keys.isEmpty else { return (0, 0) }
+
+        presentAlert(
+            title: "One-time fix for saved accounts",
+            message: [
+                "Usageview will unlock each saved sign-in token (\(keys.count) total).",
+                "",
+                "When macOS asks, enter your Mac password and click **Always Allow**.",
+                "",
+                "After this, launch and refresh should not spam password dialogs.",
+            ].joined(separator: "\n")
+        )
+
+        var fixed = 0
+        for key in keys {
+            if KeychainHelper.repairSavedToken(forKey: key) {
+                fixed += 1
+            }
+        }
+        KeychainHelper.warmSessionCache()
+        return (fixed, keys.count)
+    }
+
+    static func showSavedAccountRepairResult(fixed: Int, total: Int) {
+        if total == 0 {
+            presentAlert(
+                title: "Nothing to repair",
+                message: "No saved Usageview tokens were found in Keychain."
+            )
+            return
+        }
+        if fixed == total {
+            presentAlert(
+                title: "Saved accounts repaired",
+                message: "All \(fixed) token(s) were updated. Restart Usageview — password popups should stop."
+            )
+        } else {
+            presentAlert(
+                title: "Partially repaired",
+                message: [
+                    "Updated \(fixed) of \(total) saved token(s).",
+                    "",
+                    "For any account that still prompts, open Keychain Access, search “com.ayangabryl.usage”,",
+                    "open the item → Access Control → allow Usageview.",
+                ].joined(separator: "\n")
+            )
+        }
+    }
+
     private static func presentAlert(title: String, message: String) {
         let alert = NSAlert()
         alert.messageText = title

@@ -211,7 +211,7 @@ struct SettingsView: View {
             Label("Mac keeps asking for your password?", systemImage: "lock.shield")
                 .font(.headline)
 
-            Text("One tap turns off the setting that causes repeated Keychain popups. You can still use accounts you added in Usageview.")
+            Text("Repeated prompts for “github-token” or other saved accounts? Use **Fix saved account prompts** once (click Always Allow). **Stop password popups** only affects Claude/Gemini CLI.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -228,6 +228,11 @@ struct SettingsView: View {
                 }
                 .controlSize(.regular)
             }
+
+            Button("Fix saved account prompts…") {
+                repairSavedAccountTokens()
+            }
+            .controlSize(.regular)
 
             if let keychainFixBannerMessage {
                 Text(keychainFixBannerMessage)
@@ -253,6 +258,14 @@ struct SettingsView: View {
         claudeKeychainStatusMessage = nil
         keychainFixBannerMessage = "CLI Keychain access is off. Popups from Usageview should stop."
         KeychainPromptFixer.showStopPopupsConfirmation()
+    }
+
+    private func repairSavedAccountTokens() {
+        let result = KeychainPromptFixer.repairSavedAccountTokens()
+        KeychainPromptFixer.showSavedAccountRepairResult(fixed: result.fixed, total: result.total)
+        keychainFixBannerMessage = result.total == 0
+            ? nil
+            : "Repaired \(result.fixed) of \(result.total) saved token(s). Quit and reopen Usageview if popups continue."
     }
 
     private func connectClaudeCodeOnce() {
