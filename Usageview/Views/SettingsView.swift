@@ -17,6 +17,7 @@ struct SettingsView: View {
         ?? ClaudeKeychainReadStrategy.securityCLIExperimental.rawValue
     @State private var claudeKeychainStatusMessage: String?
     @State private var keychainFixBannerMessage: String?
+    @State private var keychainMoreOptionsExpanded = false
     @State private var editingAccountId: UUID? = nil
     @State private var editingLabel: String = ""
     @State private var showResetConfirmation = false
@@ -210,48 +211,137 @@ struct SettingsView: View {
 
     private var keychainQuickFixCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Mac keeps asking for your password?", systemImage: "lock.shield")
-                .font(.headline)
-
-            Text("Repeated prompts for “github-token” or other saved accounts? Use **Fix saved account prompts** once (click Always Allow). **Stop password popups** only affects Claude/Gemini CLI.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 10) {
-                Button("Stop password popups") {
-                    applyStopPasswordPopups()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-
-                Button("Connect Claude Code once…") {
-                    connectClaudeCodeOnce()
-                }
-                .controlSize(.regular)
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Password prompts", systemImage: "lock.shield")
+                    .font(.headline)
+                Text("If macOS keeps asking for Keychain access, start with the first fix below.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 10) {
-                Button("Fix saved account prompts…") {
-                    repairSavedAccountTokens()
-                }
-                .controlSize(.regular)
+            VStack(spacing: 0) {
+                keychainFixRow(
+                    icon: "checkmark.shield.fill",
+                    title: "Fix saved account prompts",
+                    detail: "Repairs stored tokens (e.g. github-token). Click Always Allow once if macOS asks.",
+                    buttonTitle: "Run",
+                    isProminent: true,
+                    action: repairSavedAccountTokens
+                )
 
-                Button("Clean unused Keychain entries") {
-                    cleanupOrphanedKeychainEntries()
+                keychainRowDivider
+
+                keychainFixRow(
+                    icon: "terminal.fill",
+                    title: "Link Claude Code",
+                    detail: "One-time setup to read Claude CLI credentials from Keychain.",
+                    buttonTitle: "Set up",
+                    action: connectClaudeCodeOnce
+                )
+
+                keychainRowDivider
+
+                DisclosureGroup(isExpanded: $keychainMoreOptionsExpanded) {
+                    VStack(spacing: 0) {
+                        keychainFixRow(
+                            icon: "bell.slash.fill",
+                            title: "Stop CLI password popups",
+                            detail: "Disables Claude and Gemini CLI Keychain reads only — not browser import.",
+                            buttonTitle: "Turn off",
+                            action: applyStopPasswordPopups
+                        )
+
+                        keychainRowDivider
+                            .padding(.leading, 36)
+
+                        keychainFixRow(
+                            icon: "trash.fill",
+                            title: "Clean unused entries",
+                            detail: "Removes Keychain items left over from deleted accounts.",
+                            buttonTitle: "Clean",
+                            action: cleanupOrphanedKeychainEntries
+                        )
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Text("More options")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
                 }
-                .controlSize(.regular)
+                .padding(.vertical, 10)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.primary.opacity(0.06), lineWidth: 1)
+            )
 
             if let keychainFixBannerMessage {
-                Text(keychainFixBannerMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 1)
+                    Text(keychainFixBannerMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var keychainRowDivider: some View {
+        Divider()
+            .padding(.leading, 36)
+    }
+
+    private func keychainFixRow(
+        icon: String,
+        title: String,
+        detail: String,
+        buttonTitle: String,
+        isProminent: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.body)
+                .foregroundStyle(isProminent ? Color.accentColor : .secondary)
+                .frame(width: 24, alignment: .center)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            Group {
+                if isProminent {
+                    Button(buttonTitle, action: action)
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button(buttonTitle, action: action)
+                        .buttonStyle(.bordered)
+                }
+            }
+            .controlSize(.small)
+            .fixedSize()
+        }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
     }
 
     private func applyStopPasswordPopups() {
