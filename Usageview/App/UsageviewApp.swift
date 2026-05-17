@@ -13,6 +13,8 @@ struct UsageviewApp: App {
 
     init() {
         NSApplication.shared.setActivationPolicy(.accessory)
+        KeychainPromptCoordinator.install()
+        KeychainMigration.migrateIfNeeded()
     }
 
     var body: some Scene {

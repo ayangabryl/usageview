@@ -7,6 +7,8 @@ struct MenuBarContentView: View {
     @State private var screenHistory: [Screen] = []
     @State private var renamingAccountId: UUID?
     @State private var renameText: String = ""
+    @State private var detailTab: DetailTab = .overview
+    @State private var showCostBreakdownPopover: Bool = false
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -29,6 +31,11 @@ struct MenuBarContentView: View {
         case connectAugment(UUID)
         case connectJetBrains(UUID)
         case accountDetail(UUID)
+    }
+
+    enum DetailTab: String, CaseIterable {
+        case overview = "Overview"
+        case usage = "Usage"
     }
 
     var body: some View {
@@ -869,10 +876,19 @@ struct MenuBarContentView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
 
+                        Picker("", selection: $detailTab) {
+                            ForEach(DetailTab.allCases, id: \.self) { tab in
+                                Text(tab.rawValue).tag(tab)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .controlSize(.small)
+
                         // Usage section
                         if store.isConnected(for: account) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                detailSectionTitle("Usage")
+                            if detailTab == .overview {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    detailSectionTitle("Usage")
 
                                 if account.serviceType == .claude && account.authMethod == .oauth {
                                     // Claude OAuth: always show dual windows
@@ -1029,41 +1045,175 @@ struct MenuBarContentView: View {
                                     .padding(10)
                                     .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
                                 }
+                                }
                             }
 
-                            // Account info section
-                            VStack(alignment: .leading, spacing: 10) {
-                                detailSectionTitle("Account")
+                            if detailTab == .usage {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    detailSectionTitle("Usage & Spend")
+
+                                    VStack(spacing: 0) {
+                                        detailInfoRow(label: "Cycle", value: usageCycleLabel(for: account))
+                                        Divider().padding(.horizontal, 10)
+                                        detailInfoRow(label: "Primary Metric", value: usagePrimaryMetric(for: account))
+
+                                        if let spend = detailMonthlySpendLabel(for: account) {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(label: "Monthly Spend", value: spend)
+                                        }
+
+                                        if let credits = detailCreditsLabel(for: account) {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(label: "Credits", value: credits)
+                                        }
+                                    }
+                                    .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+
+                                    let costPoints = detailCostPoints(for: account)
+                                    Button {
+                                        showCostBreakdownPopover = true
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            HStack {
+                                                Text("Cost")
+                                                    .font(.headline)
+                                                    .foregroundStyle(.white)
+                                                Spacer()
+                                                Image(systemName: "chevron.right")
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(.white.opacity(0.9))
+                                            }
+                                            Text("Today: \(detailTodayCostLabel(for: account))")
+                                                .font(.headline.weight(.bold))
+                                                .foregroundStyle(.white)
+                                            if let tokenLabel = detailTodayTokensLabel(for: account) {
+                                                Text("Tokens: \(tokenLabel)")
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(.white.opacity(0.95))
+                                            }
+                                            Text("Last 30 days: \(detailLast30dCostLabel(for: account))")
+                                                .font(.headline.weight(.bold))
+                                                .foregroundStyle(.white)
+                                            if let tokenLabel = detailLast30dTokensLabel(for: account) {
+                                                Text("30d Tokens: \(tokenLabel)")
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(.white.opacity(0.95))
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(12)
+                                        .background(account.accentColor, in: RoundedRectangle(cornerRadius: 10))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .popover(isPresented: $showCostBreakdownPopover, arrowEdge: .top) {
+                                        costBreakdownPopover(points: costPoints, fallbackTotalLabel: detailLast30dCostLabel(for: account))
+                                            .frame(width: 360, height: 260)
+                                            .padding(16)
+                                    }
+
+                                    if costPoints.isEmpty {
+                                        Text("Daily history is still collecting. Last 30 days uses the latest provider snapshot for now.")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 2)
+                                    }
+
+                                    VStack(spacing: 0) {
+                                        detailInfoRow(label: "Usage Source", value: detailUsageSource(for: account))
+                                    }
+                                    .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                                }
+                            }
+
+                            // Provider diagnostics (CodexBar-style relevance details)
+                            if detailTab == .overview {
+                                VStack(alignment: .leading, spacing: 10) {
+                                detailSectionTitle("Provider")
 
                                 VStack(spacing: 0) {
-                                    detailInfoRow(label: "Service", value: account.serviceType.displayName)
+                                    detailInfoRow(label: "Usage Source", value: detailUsageSource(for: account))
                                     Divider().padding(.horizontal, 10)
-                                    detailInfoRow(
-                                        label: "Auth",
-                                        value: account.authMethod == .oauth ? "OAuth" : "API Key"
-                                    )
-                                    if let plan = account.planName {
+                                    detailInfoRow(label: "Tracking", value: account.isStatusOnly ? "Status only" : "Quota tracking")
+                                    if account.hasDualWindows {
                                         Divider().padding(.horizontal, 10)
-                                        detailInfoRow(label: "Plan", value: plan)
+                                        detailInfoRow(label: "Rate Windows", value: account.serviceType == .gemini ? "Pro + Flash" : "5-hour + 7-day")
                                     }
-                                    if let org = account.organizationName {
+                                    if account.isDemoAccount {
                                         Divider().padding(.horizontal, 10)
-                                        detailInfoRow(label: "Organization", value: org)
-                                    }
-                                    if let role = account.memberRole {
-                                        Divider().padding(.horizontal, 10)
-                                        detailInfoRow(label: "Role", value: role.capitalized)
-                                    }
-                                    if let username = account.username {
-                                        Divider().padding(.horizontal, 10)
-                                        detailInfoRow(label: "Signed in as", value: username)
-                                    }
-                                    if !account.label.isEmpty {
-                                        Divider().padding(.horizontal, 10)
-                                        detailInfoRow(label: "Label", value: account.label)
+                                        detailInfoRow(label: "Data Mode", value: "Demo snapshot")
                                     }
                                 }
                                 .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+
+                                HStack(spacing: 8) {
+                                    if let dashboardURL = account.serviceType.dashboardURL {
+                                        Button {
+                                            NSWorkspace.shared.open(dashboardURL)
+                                        } label: {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "safari")
+                                                    .font(.caption2)
+                                                Text("Open Dashboard")
+                                                    .font(.caption.weight(.medium))
+                                            }
+                                            .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
+                                    if let statusURL = account.serviceType.statusPageURL {
+                                        Button {
+                                            NSWorkspace.shared.open(statusURL)
+                                        } label: {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "waveform.path.ecg")
+                                                    .font(.caption2)
+                                                Text("Status Page")
+                                                    .font(.caption.weight(.medium))
+                                            }
+                                            .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                            }
+                            }
+
+                            // Account info section
+                            if detailTab == .overview {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    detailSectionTitle("Account")
+
+                                    VStack(spacing: 0) {
+                                        detailInfoRow(label: "Service", value: account.serviceType.displayName)
+                                        Divider().padding(.horizontal, 10)
+                                        detailInfoRow(
+                                            label: "Auth",
+                                            value: account.authMethod == .oauth ? "OAuth" : "API Key"
+                                        )
+                                        if let plan = account.planName {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(label: "Plan", value: plan)
+                                        }
+                                        if let org = account.organizationName {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(label: "Organization", value: org)
+                                        }
+                                        if let role = account.memberRole {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(label: "Role", value: role.capitalized)
+                                        }
+                                        if let username = account.username {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(label: "Signed in as", value: username)
+                                        }
+                                        if !account.label.isEmpty {
+                                            Divider().padding(.horizontal, 10)
+                                            detailInfoRow(label: "Label", value: account.label)
+                                        }
+                                    }
+                                    .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                                }
                             }
 
                             // Actions
@@ -1113,6 +1263,10 @@ struct MenuBarContentView: View {
                     if account.serviceType == .claude && account.authMethod == .oauth && !account.hasDualWindows {
                         await store.refreshAccount(account)
                     }
+                }
+                .onAppear {
+                    detailTab = .overview
+                    showCostBreakdownPopover = false
                 }
             } else {
                 Spacer()
@@ -1204,6 +1358,240 @@ struct MenuBarContentView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
     }
+
+    private func detailUsageSource(for account: Account) -> String {
+        switch (account.serviceType, account.authMethod) {
+        case (.claude, .oauth):
+            return "Claude CLI OAuth (fallback: Usageview OAuth)"
+        case (.claude, .apiKey):
+            return "Anthropic API key"
+        case (.chatgpt, .oauth):
+            return "OpenAI OAuth usage API"
+        case (.chatgpt, .apiKey):
+            return "OpenAI API key"
+        case (.gemini, .oauth):
+            return "Gemini CLI credentials"
+        case (.gemini, .apiKey):
+            return "Gemini API key"
+        case (.copilot, _):
+            return "GitHub Copilot API"
+        case (.cursor, _):
+            return "Cursor session API"
+        case (.openrouter, _):
+            return "OpenRouter credits API"
+        case (.kimi, _):
+            return "Moonshot billing API"
+        case (.kiro, _):
+            return "Kiro authentication probe"
+        case (.augment, _):
+            return "Augment authentication probe"
+        case (.jetbrainsAI, _):
+            return "JetBrains local quota source"
+        }
+    }
+
+    private func usageCycleLabel(for account: Account) -> String {
+        switch account.serviceType {
+        case .claude, .chatgpt:
+            return "5-hour and 7-day rolling windows"
+        case .copilot, .cursor:
+            return "Monthly billing cycle"
+        case .openrouter:
+            return "Credit balance tracking"
+        case .gemini:
+            return account.authMethod == .oauth ? "Pro and Flash quota windows" : "Connection status"
+        case .kimi:
+            return account.hasKimiBilling ? "Weekly quota and short-term limit" : "Connection status"
+        case .kiro, .augment, .jetbrainsAI:
+            return "Provider-specific quota/status"
+        }
+    }
+
+    private func usagePrimaryMetric(for account: Account) -> String {
+        if account.serviceType == .cursor, account.usageLimit > 0 {
+            return String(format: "$%.2f / $%.2f used this cycle", account.currentUsage / 100.0, account.usageLimit / 100.0)
+        }
+        if account.hasOpenRouterCredits,
+           let used = account.openRouterTotalUsage,
+           let total = account.openRouterTotalCredits
+        {
+            return String(format: "$%.2f / $%.2f credits used", used, total)
+        }
+        if account.hasKimiBilling,
+           let used = account.kimiWeeklyUsed,
+           let limit = account.kimiWeeklyLimit
+        {
+            return "\(Int(used)) / \(Int(limit)) requests this week"
+        }
+        return account.formattedUsage
+    }
+
+    private func detailMonthlySpendLabel(for account: Account) -> String? {
+        if let spend = account.monthlySpendUSD {
+            if let limit = account.monthlySpendLimitUSD, limit > 0 {
+                return String(format: "$%.2f / $%.2f", spend, limit)
+            }
+            return String(format: "$%.2f", spend)
+        }
+        if account.serviceType == .cursor, account.usageLimit > 0 {
+            let used = account.currentUsage / 100.0
+            let limit = account.usageLimit / 100.0
+            return String(format: "$%.2f / $%.2f", used, limit)
+        }
+        return nil
+    }
+
+    private func detailCreditsLabel(for account: Account) -> String? {
+        if account.serviceType == .chatgpt,
+           let unlimited = account.openAICreditsUnlimited,
+           unlimited
+        {
+            return "Unlimited"
+        }
+        if account.serviceType == .chatgpt,
+           let balance = account.openAICreditsBalance
+        {
+            return String(format: "$%.2f balance", balance)
+        }
+        if account.hasOpenRouterCredits,
+           let used = account.openRouterTotalUsage,
+           let total = account.openRouterTotalCredits
+        {
+            return String(format: "$%.2f remaining", max(total - used, 0))
+        }
+        return nil
+    }
+
+    private func detailCostPoints(for account: Account) -> [(date: String, value: Double)] {
+        guard let history = account.spendHistoryByDay, !history.isEmpty else { return [] }
+        let sorted = history.keys.sorted()
+        guard !sorted.isEmpty else { return [] }
+
+        var daily: [(String, Double)] = []
+        var previousCumulative: Double?
+        for day in sorted {
+            let cumulative = history[day] ?? 0
+            let delta = max(cumulative - (previousCumulative ?? 0), 0)
+            daily.append((day, delta))
+            previousCumulative = cumulative
+        }
+
+        return Array(daily.suffix(30))
+    }
+
+    private func detailTodayCostLabel(for account: Account) -> String {
+        let points = detailCostPoints(for: account)
+        guard let today = points.last?.value else {
+            return "Not available"
+        }
+        return String(format: "$%.2f", today)
+    }
+
+    private func detailLast30dCostLabel(for account: Account) -> String {
+        let points = detailCostPoints(for: account)
+        if !points.isEmpty {
+            let total = points.reduce(0) { $0 + $1.value }
+            return String(format: "$%.2f", total)
+        }
+
+        if let spend = account.monthlySpendUSD {
+            return String(format: "$%.2f", spend)
+        }
+
+        if account.hasOpenRouterCredits, let used = account.openRouterTotalUsage {
+            return String(format: "$%.2f", used)
+        }
+
+        if account.serviceType == .cursor, account.usageLimit > 0 {
+            return String(format: "$%.2f", account.currentUsage / 100.0)
+        }
+
+        return "Not available"
+    }
+
+    private func detailTodayTokensLabel(for account: Account) -> String? {
+        guard account.serviceType == .claude,
+              account.authMethod == .oauth,
+              let tokens = account.todayTokenCount,
+              tokens > 0
+        else {
+            return nil
+        }
+        return formatTokenCount(tokens)
+    }
+
+    private func detailLast30dTokensLabel(for account: Account) -> String? {
+        guard account.serviceType == .claude,
+              account.authMethod == .oauth,
+              let tokens = account.last30DayTokenCount,
+              tokens > 0
+        else {
+            return nil
+        }
+        return formatTokenCount(tokens)
+    }
+
+    private func formatTokenCount(_ count: Int64) -> String {
+        let value = Double(count)
+        switch value {
+        case 1_000_000_000...:
+            return String(format: "%.2fB", value / 1_000_000_000)
+        case 1_000_000...:
+            return String(format: "%.2fM", value / 1_000_000)
+        case 1_000...:
+            return String(format: "%.1fK", value / 1_000)
+        default:
+            return "\(count)"
+        }
+    }
+
+    private func costBreakdownPopover(points: [(date: String, value: Double)], fallbackTotalLabel: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Cost")
+                .font(.title3.weight(.semibold))
+
+            if points.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No daily history yet")
+                        .font(.subheadline.weight(.medium))
+                    Text("Keep refreshing usage and the 30-day bars will appear automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Current 30d summary: \(fallbackTotalLabel)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                GeometryReader { geo in
+                    let maxValue = max(points.map { $0.value }.max() ?? 1, 1)
+                    let barCount = max(points.count, 1)
+                    let gap: CGFloat = 4
+                    let totalGap = gap * CGFloat(barCount - 1)
+                    let barWidth = max((geo.size.width - totalGap) / CGFloat(barCount), 3)
+
+                    HStack(alignment: .bottom, spacing: gap) {
+                        ForEach(Array(points.enumerated()), id: \.offset) { _, item in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color(hex: "#C87857"))
+                                .frame(width: barWidth, height: max(2, geo.size.height * CGFloat(item.value / maxValue)))
+                                .help("\(item.date): \(String(format: "$%.2f", item.value))")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                }
+                .frame(height: 120)
+
+                Text("Hover a bar for details")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("Total (30d): \(String(format: "$%.2f", points.reduce(0) { $0 + $1.value }))")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
 }
 
 // MARK: - GitHub Inline Connect
@@ -1231,10 +1619,7 @@ struct GitHubInlineConnectView: View {
                     .kerning(4)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
-                    .background(
-                        ServiceType.copilot.accentColor.opacity(0.1),
-                        in: RoundedRectangle(cornerRadius: 10)
-                    )
+                    .background(ServiceType.copilot.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
 
                 Button {
                     NSPasteboard.general.clearContents()

@@ -104,9 +104,7 @@ enum GeminiOAuthError: LocalizedError {
 
 @MainActor
 final class GeminiOAuthService: Sendable {
-    private static let allowCLIKeychainAccessDefaultsKey = "allowGeminiCLIKeychainAccess"
-    private var suppressCLIKeychainReadsThisSession = false
-    var isCLIKeychainReadSuppressed: Bool { suppressCLIKeychainReadsThisSession }
+    var isCLIKeychainReadSuppressed: Bool { GeminiCLICredentialStore.isReadSuppressed }
 
     // Same OAuth client ID/secret used by Gemini CLI (public installed-app credentials)
     // See: https://developers.google.com/identity/protocols/oauth2#installed
@@ -298,114 +296,22 @@ final class GeminiOAuthService: Sendable {
         return nil
     }
 
-    /// Try to read credentials from Gemini CLI (keychain or file)
+  /// Try to read credentials from Gemini CLI (file → cache → security CLI → Keychain).
     private func getTokenFromCLI(for accountId: UUID) async -> String? {
-        // Try ~/.gemini/oauth_creds.json file
-        if let fileCreds = readCLICredentialsFromFile() {
-            if let expiryMs = fileCreds.expiresAt,
-               Date(timeIntervalSince1970: expiryMs / 1000) < Date() {
-                if let refreshToken = fileCreds.refreshToken {
-                    if let newAccess = await refreshAccessToken(refreshToken: refreshToken, for: accountId) {
-                        return newAccess
-                    }
-                }
-            } else {
-                return fileCreds.accessToken
-            }
-        }
+        guard let cliCreds = GeminiCLICredentialStore.load() else { return nil }
 
-        guard UserDefaults.standard.bool(forKey: Self.allowCLIKeychainAccessDefaultsKey) else {
-            geminiOAuthLogger.debug("Gemini CLI keychain access disabled by preference")
-            return nil
-        }
-
-        guard !suppressCLIKeychainReadsThisSession else {
-            geminiOAuthLogger.debug("Skipping Gemini CLI keychain read for this session")
-            return nil
-        }
-
-        // Try macOS Keychain (gemini-cli-oauth service)
-        if let keychainCreds = readCLICredentialsFromKeychain() {
-            if let expiresAt = keychainCreds.expiresAt,
-               expiresAt <= Date.now.timeIntervalSince1970 * 1000 {
-                if let refreshToken = keychainCreds.refreshToken {
-                    if let newAccess = await refreshAccessToken(refreshToken: refreshToken, for: accountId) {
-                        return newAccess
-                    }
-                }
-            } else {
-                return keychainCreds.accessToken
-            }
-        }
-
-        return nil
-    }
-
-    private func readCLICredentialsFromKeychain() -> GeminiOAuthCredentials? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "gemini-cli-oauth",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            if status == errSecAuthFailed || status == errSecUserCanceled || status == errSecInteractionNotAllowed {
-                suppressCLIKeychainReadsThisSession = true
-                geminiOAuthLogger.info("Suppressing Gemini CLI keychain reads for this session (status \(status))")
+        let nowMs = Date.now.timeIntervalSince1970 * 1000
+        if let expiresAt = cliCreds.expiresAt, expiresAt <= nowMs {
+            if let refreshToken = cliCreds.refreshToken {
+                return await refreshAccessToken(refreshToken: refreshToken, for: accountId)
             }
             return nil
         }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-
-        let tokenData = (json["main-account"] as? [String: Any])
-            ?? (json["token"] as? [String: Any])
-            ?? json
-
-        guard let accessToken = tokenData["accessToken"] as? String
-            ?? tokenData["access_token"] as? String,
-              !accessToken.isEmpty
-        else { return nil }
-
-        geminiOAuthLogger.info("Read Gemini CLI credentials from Keychain")
-        return GeminiOAuthCredentials(
-            accessToken: accessToken,
-            refreshToken: tokenData["refreshToken"] as? String ?? tokenData["refresh_token"] as? String,
-            idToken: tokenData["id_token"] as? String,
-            expiresAt: tokenData["expiresAt"] as? Double ?? tokenData["expiry_date"] as? Double
-        )
-    }
-
-    private func readCLICredentialsFromFile() -> GeminiOAuthCredentials? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let credsPaths = [
-            home.appendingPathComponent(".gemini/oauth_creds.json"),
-            home.appendingPathComponent(".gemini/.credentials.json"),
-        ]
-
-        for credsPath in credsPaths {
-            guard let data = try? Data(contentsOf: credsPath),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
-
-            guard let accessToken = json["access_token"] as? String, !accessToken.isEmpty else { continue }
-
-            geminiOAuthLogger.info("Read Gemini CLI credentials from \(credsPath.lastPathComponent)")
-            return GeminiOAuthCredentials(
-                accessToken: accessToken,
-                refreshToken: json["refresh_token"] as? String,
-                idToken: json["id_token"] as? String,
-                expiresAt: json["expiry_date"] as? Double
-            )
-        }
-
-        return nil
+        return cliCreds.accessToken
     }
 
     func resetCLIKeychainReadSuppression() {
-        suppressCLIKeychainReadsThisSession = false
+        GeminiCLICredentialStore.resetSession()
     }
 
     func hasCredentials(for accountId: UUID) -> Bool {

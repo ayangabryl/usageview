@@ -45,6 +45,15 @@ struct Account: Codable, Identifiable, Sendable {
     var openRouterTotalCredits: Double?
     var openRouterTotalUsage: Double?
 
+    // Provider spend / billing metadata
+    var monthlySpendUSD: Double?
+    var monthlySpendLimitUSD: Double?
+    var openAICreditsBalance: Double?
+    var openAICreditsUnlimited: Bool?
+    var spendHistoryByDay: [String: Double]?
+    var todayTokenCount: Int64?
+    var last30DayTokenCount: Int64?
+
     // App Review demo mode flag
     var isDemoAccount: Bool = false
 
@@ -96,6 +105,13 @@ struct Account: Codable, Identifiable, Sendable {
         kimiRateLimitResetDate = try container.decodeIfPresent(Date.self, forKey: .kimiRateLimitResetDate)
         openRouterTotalCredits = try container.decodeIfPresent(Double.self, forKey: .openRouterTotalCredits)
         openRouterTotalUsage = try container.decodeIfPresent(Double.self, forKey: .openRouterTotalUsage)
+        monthlySpendUSD = try container.decodeIfPresent(Double.self, forKey: .monthlySpendUSD)
+        monthlySpendLimitUSD = try container.decodeIfPresent(Double.self, forKey: .monthlySpendLimitUSD)
+        openAICreditsBalance = try container.decodeIfPresent(Double.self, forKey: .openAICreditsBalance)
+        openAICreditsUnlimited = try container.decodeIfPresent(Bool.self, forKey: .openAICreditsUnlimited)
+        spendHistoryByDay = try container.decodeIfPresent([String: Double].self, forKey: .spendHistoryByDay)
+        todayTokenCount = try container.decodeIfPresent(Int64.self, forKey: .todayTokenCount)
+        last30DayTokenCount = try container.decodeIfPresent(Int64.self, forKey: .last30DayTokenCount)
         isDemoAccount = try container.decodeIfPresent(Bool.self, forKey: .isDemoAccount) ?? false
         jetbrainsQuotaCurrent = try container.decodeIfPresent(Double.self, forKey: .jetbrainsQuotaCurrent)
         jetbrainsQuotaMaximum = try container.decodeIfPresent(Double.self, forKey: .jetbrainsQuotaMaximum)

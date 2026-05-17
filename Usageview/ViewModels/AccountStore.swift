@@ -341,7 +341,40 @@ final class AccountStore {
         accounts[index].sevenDayResetDate = snap.sevenDayResetDate
         accounts[index].openRouterTotalCredits = snap.openRouterTotalCredits
         accounts[index].openRouterTotalUsage = snap.openRouterTotalUsage
+        accounts[index].monthlySpendUSD = nil
+        accounts[index].monthlySpendLimitUSD = nil
+        accounts[index].openAICreditsBalance = nil
+        accounts[index].openAICreditsUnlimited = nil
+        accounts[index].todayTokenCount = nil
+        accounts[index].last30DayTokenCount = nil
         save()
+    }
+
+    private func recordSpendSnapshot(index: Int, cumulativeUSD: Double) {
+        let key = Self.spendDayKey(for: Date())
+        if accounts[index].spendHistoryByDay == nil {
+            accounts[index].spendHistoryByDay = [:]
+        }
+        accounts[index].spendHistoryByDay?[key] = max(cumulativeUSD, 0)
+
+        let cutoff = Calendar.current.date(byAdding: .day, value: -45, to: Date()) ?? Date.distantPast
+        let cutoffKey = Self.spendDayKey(for: cutoff)
+        accounts[index].spendHistoryByDay = accounts[index].spendHistoryByDay?.filter { $0.key >= cutoffKey }
+    }
+
+    private func replaceSpendHistory(index: Int, cumulativeByDay: [String: Double]) {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -45, to: Date()) ?? Date.distantPast
+        let cutoffKey = Self.spendDayKey(for: cutoff)
+        accounts[index].spendHistoryByDay = cumulativeByDay.filter { $0.key >= cutoffKey }
+    }
+
+    private static func spendDayKey(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
     func refreshAccount(_ account: Account) async {
@@ -418,6 +451,18 @@ final class AccountStore {
                         if let org = usage.organizationName {
                             accounts[index].organizationName = org
                         }
+                        accounts[index].monthlySpendUSD = usage.monthlySpendUSD ?? 0
+                        accounts[index].monthlySpendLimitUSD = usage.monthlySpendLimitUSD
+                        accounts[index].todayTokenCount = nil
+                        accounts[index].last30DayTokenCount = nil
+                        recordSpendSnapshot(index: index, cumulativeUSD: usage.monthlySpendUSD ?? 0)
+
+                        if let local = claudeUsage.fetchLocalUsageSummary(lastDays: 30) {
+                            accounts[index].monthlySpendUSD = max(accounts[index].monthlySpendUSD ?? 0, local.last30DayCostUSD)
+                            accounts[index].todayTokenCount = local.todayTokens
+                            accounts[index].last30DayTokenCount = local.last30DayTokens
+                            replaceSpendHistory(index: index, cumulativeByDay: local.dailyCumulativeSpendByDay)
+                        }
                     }
                 }
                 save()
@@ -454,6 +499,9 @@ final class AccountStore {
                         accounts[index].sevenDayUsage = Double(weekly)
                         accounts[index].sevenDayResetDate = status.weeklyResetAt
                     }
+
+                    accounts[index].openAICreditsBalance = status.creditsBalance
+                    accounts[index].openAICreditsUnlimited = status.creditsUnlimited
 
                     // If no rate limit data, fall back to status display
                     if status.fiveHourUsedPercent == nil {
@@ -557,6 +605,7 @@ final class AccountStore {
                         if let reset = usage.billingCycleEnd {
                             accounts[index].resetDate = reset
                         }
+                        recordSpendSnapshot(index: index, cumulativeUSD: usage.usedCents / 100.0)
                     } else {
                         accounts[index].usageUnit = usage.planName ?? "Connected"
                     }
@@ -575,6 +624,7 @@ final class AccountStore {
                         accounts[index].currentUsage = pct
                         accounts[index].usageLimit = 100
                         accounts[index].usageUnit = String(format: "$%.2f remaining", remaining)
+                        recordSpendSnapshot(index: index, cumulativeUSD: usage.totalUsage)
                     } else {
                         accounts[index].usageUnit = "Connected"
                     }

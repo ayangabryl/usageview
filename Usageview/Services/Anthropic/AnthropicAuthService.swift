@@ -41,14 +41,8 @@ enum ClaudeKeychainInteraction: Sendable {
 @MainActor
 final class AnthropicAuthService: Sendable {
     var isLoading: Bool = false
-    private static let allowCLIKeychainAccessDefaultsKey = "allowClaudeCLIKeychainAccess"
-    private static let promptModeDefaultsKey = "claudeOAuthKeychainPromptMode"
-    private static let deniedUntilDefaultsKey = "claudeOAuthKeychainDeniedUntil"
-    private static let deniedCooldownInterval: TimeInterval = 60 * 60 * 6
-    private var suppressCLIKeychainReadsThisSession = false
-    private var hasAttemptedCLIReadThisSession = false
     private var cachedCLICredentials: ClaudeCLICredentials?
-    var isCLIKeychainReadSuppressed: Bool { suppressCLIKeychainReadsThisSession }
+    var isCLIKeychainReadSuppressed: Bool { ClaudeCLICredentialStore.isReadSuppressed }
 
     private let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private let redirectURI = "https://console.anthropic.com/oauth/code/callback"
@@ -66,181 +60,24 @@ final class AnthropicAuthService: Sendable {
 
     // MARK: - Claude Code CLI Credentials
 
-    /// Read OAuth credentials stored by Claude Code CLI in macOS Keychain
+    /// Read OAuth credentials stored by Claude Code CLI (file → cache → security CLI → Keychain).
     func readClaudeCLICredentials(interaction: ClaudeKeychainInteraction = .background) -> ClaudeCLICredentials? {
-        if let cachedCLICredentials {
-            return cachedCLICredentials
-        }
-
-        if interaction == .background {
-            guard !hasAttemptedCLIReadThisSession else {
-                return nil
-            }
-            hasAttemptedCLIReadThisSession = true
-        }
-
-        // Prefer file credentials first to avoid macOS keychain permission prompts.
-        if let fileCreds = readClaudeFileCredentials() {
-            cachedCLICredentials = fileCreds
-            return fileCreds
-        }
-
-        guard UserDefaults.standard.bool(forKey: Self.allowCLIKeychainAccessDefaultsKey) else {
-            authLogger.debug("Claude CLI keychain access disabled by preference")
-            return nil
-        }
-
-        guard !suppressCLIKeychainReadsThisSession else {
-            authLogger.debug("Skipping Claude CLI keychain read for this session")
-            return nil
-        }
-
-        let promptMode = currentPromptMode()
-        guard shouldAttemptCLIKeychainRead(mode: promptMode, interaction: interaction) else {
-            authLogger.debug("Skipping Claude CLI keychain read due to prompt mode")
-            return nil
-        }
-
-        guard !isInKeychainDeniedCooldown() else {
-            authLogger.debug("Skipping Claude CLI keychain read due to cooldown")
-            return nil
-        }
-
-        let serviceNames = [
-            "Claude Code-credentials",
-            // Fallback: hashed config dir variant
-        ]
-
-        for serviceName in serviceNames {
-            if let creds = readKeychainGenericPassword(service: serviceName) {
-                cachedCLICredentials = creds
-                return creds
-            }
-        }
-
-        if interaction == .userInitiated, promptMode == .always {
-            for serviceName in serviceNames {
-                if let creds = readKeychainGenericPassword(service: serviceName, allowInteractivePrompt: true) {
-                    cachedCLICredentials = creds
-                    return creds
-                }
-            }
-        }
-
-        return nil
+        if let cachedCLICredentials { return cachedCLICredentials }
+        let creds = ClaudeCLICredentialStore.load(interaction: interaction)
+        cachedCLICredentials = creds
+        return creds
     }
 
     func resetCLIKeychainReadSuppression() {
-        suppressCLIKeychainReadsThisSession = false
-        hasAttemptedCLIReadThisSession = false
         cachedCLICredentials = nil
-        clearKeychainDeniedCooldown()
+        ClaudeCLICredentialStore.resetSession()
     }
 
-    private func readKeychainGenericPassword(service: String, allowInteractivePrompt: Bool = false) -> ClaudeCLICredentials? {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        if !allowInteractivePrompt {
-            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
-        }
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            if status == errSecAuthFailed || status == errSecUserCanceled || status == errSecInteractionNotAllowed {
-                suppressCLIKeychainReadsThisSession = true
-                recordKeychainDeniedCooldown()
-                authLogger.info("Suppressing Claude CLI keychain reads for this session (status \(status))")
-            }
-            authLogger.debug("Keychain read for '\(service)' returned status \(status)")
-            return nil
-        }
-
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            authLogger.debug("Keychain data for '\(service)' is not valid JSON")
-            return nil
-        }
-
-        // Claude Code stores credentials under "claudeAiOauth" nested key
-        let creds = (json["claudeAiOauth"] as? [String: Any]) ?? json
-
-        guard let accessToken = creds["accessToken"] as? String, !accessToken.isEmpty else {
-            authLogger.debug("No accessToken in Keychain entry '\(service)'")
-            return nil
-        }
-
-        let refreshToken = creds["refreshToken"] as? String
-        let expiresAt = creds["expiresAt"] as? Double
-
-        authLogger.info("Read Claude CLI credentials from Keychain '\(service)'")
-        return ClaudeCLICredentials(
-            accessToken: accessToken,
-            refreshToken: refreshToken,
-            expiresAt: expiresAt
-        )
-    }
-
-    private func currentPromptMode() -> ClaudeKeychainPromptMode {
-        if let raw = UserDefaults.standard.string(forKey: Self.promptModeDefaultsKey),
-           let mode = ClaudeKeychainPromptMode(rawValue: raw)
-        {
-            return mode
-        }
-        return .onlyOnUserAction
-    }
-
-    private func shouldAttemptCLIKeychainRead(mode: ClaudeKeychainPromptMode, interaction: ClaudeKeychainInteraction) -> Bool {
-        switch mode {
-        case .never:
-            return false
-        case .onlyOnUserAction:
-            return interaction == .userInitiated
-        case .always:
-            return true
-        }
-    }
-
-    private func isInKeychainDeniedCooldown(now: Date = Date()) -> Bool {
-        let ts = UserDefaults.standard.double(forKey: Self.deniedUntilDefaultsKey)
-        guard ts > 0 else { return false }
-        let deniedUntil = Date(timeIntervalSince1970: ts)
-        if deniedUntil > now { return true }
-        UserDefaults.standard.removeObject(forKey: Self.deniedUntilDefaultsKey)
-        return false
-    }
-
-    private func recordKeychainDeniedCooldown(now: Date = Date()) {
-        let deniedUntil = now.addingTimeInterval(Self.deniedCooldownInterval)
-        UserDefaults.standard.set(deniedUntil.timeIntervalSince1970, forKey: Self.deniedUntilDefaultsKey)
-    }
-
-    private func clearKeychainDeniedCooldown() {
-        UserDefaults.standard.removeObject(forKey: Self.deniedUntilDefaultsKey)
-    }
-
-    private func readClaudeFileCredentials() -> ClaudeCLICredentials? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let credPath = home.appendingPathComponent(".claude/.credentials.json")
-
-        guard let data = try? Data(contentsOf: credPath),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-
-        let creds = (json["claudeAiOauth"] as? [String: Any]) ?? json
-
-        guard let accessToken = creds["accessToken"] as? String, !accessToken.isEmpty else {
-            return nil
-        }
-
-        authLogger.info("Read Claude CLI credentials from file")
-        return ClaudeCLICredentials(
-            accessToken: accessToken,
-            refreshToken: creds["refreshToken"] as? String,
-            expiresAt: creds["expiresAt"] as? Double
-        )
+    func connectClaudeCodeKeychainOnce() -> Bool {
+        cachedCLICredentials = nil
+        let ok = ClaudeCLICredentialStore.connectOnce()
+        if ok { cachedCLICredentials = ClaudeCLICredentialStore.load(interaction: .userInitiated) }
+        return ok
     }
 
     /// Refresh a Claude CLI token using the official platform.claude.com endpoint
@@ -286,9 +123,15 @@ final class AnthropicAuthService: Sendable {
         }
     }
 
-    /// Get a valid access token for usage API, preferring Claude CLI credentials
+    /// Get a valid access token for usage API, preferring Claude CLI credentials when available.
     func getValidTokenPreferCLI(for accountId: UUID) async -> String? {
-        // First, try Claude Code CLI credentials (most accurate usage data)
+        // When the account is linked in Usageview, use our own keychain tokens first
+        // so background refreshes never touch Claude Code's keychain entry.
+        if isAuthenticated(for: accountId), let appToken = await getValidToken(for: accountId) {
+            return appToken
+        }
+
+        // Fall back to Claude Code CLI credentials (file → security CLI → Security.framework).
         if let cliCreds = readClaudeCLICredentials(interaction: .background) {
             let now = Date.now.timeIntervalSince1970
 
@@ -298,10 +141,19 @@ final class AnthropicAuthService: Sendable {
                 return cliCreds.accessToken
             }
 
-            // Token expired, try to refresh
+            // Token expired — HTTP refresh first, then delegated Claude CLI touch (CodexBar pattern).
             if let refreshToken = cliCreds.refreshToken {
                 if let refreshed = await refreshCLIToken(refreshToken) {
                     authLogger.info("Using refreshed Claude CLI token for usage")
+                    return refreshed.accessToken
+                }
+            }
+
+            let delegated = await ClaudeDelegatedRefreshCoordinator.attemptIfNeeded()
+            if delegated == .attemptedSucceeded {
+                ClaudeCLICredentialStore.invalidateMemoryCache()
+                cachedCLICredentials = nil
+                if let refreshed = readClaudeCLICredentials(interaction: .background) {
                     return refreshed.accessToken
                 }
             }

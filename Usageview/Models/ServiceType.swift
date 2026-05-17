@@ -113,4 +113,34 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .jetbrainsAI: 0
         }
     }
+
+    var dashboardURL: URL? {
+        let urlString: String = switch self {
+        case .claude: "https://claude.ai/settings/billing"
+        case .copilot: "https://github.com/settings/copilot"
+        case .chatgpt: "https://platform.openai.com/settings/organization/usage"
+        case .gemini: "https://aistudio.google.com/"
+        case .kimi: "https://platform.moonshot.ai/console/billing"
+        case .cursor: "https://www.cursor.com/settings"
+        case .openrouter: "https://openrouter.ai/settings/credits"
+        case .kiro: "https://kiro.dev/"
+        case .augment: "https://app.augmentcode.com/"
+        case .jetbrainsAI: "https://account.jetbrains.com/"
+        }
+        return URL(string: urlString)
+    }
+
+    var statusPageURL: URL? {
+        let urlString: String? = switch self {
+        case .claude: "https://status.anthropic.com/"
+        case .copilot: "https://www.githubstatus.com/"
+        case .chatgpt: "https://status.openai.com/"
+        case .gemini: "https://status.cloud.google.com/"
+        case .openrouter: "https://status.openrouter.ai/"
+        case .cursor: "https://status.cursor.com/"
+        case .kiro, .augment, .jetbrainsAI, .kimi: nil
+        }
+        guard let urlString else { return nil }
+        return URL(string: urlString)
+    }
 }

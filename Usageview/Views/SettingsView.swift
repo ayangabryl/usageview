@@ -11,7 +11,10 @@ struct SettingsView: View {
     @State private var claudeKeychainPromptModeRaw: String = UserDefaults.standard.string(forKey: "claudeOAuthKeychainPromptMode")
         ?? ClaudeKeychainPromptMode.onlyOnUserAction.rawValue
     @State private var allowGeminiCLIKeychainAccess: Bool = UserDefaults.standard.bool(forKey: "allowGeminiCLIKeychainAccess")
+    @State private var claudeKeychainReadStrategyRaw: String = UserDefaults.standard.string(forKey: "claudeOAuthKeychainReadStrategy")
+        ?? ClaudeKeychainReadStrategy.securityCLIExperimental.rawValue
     @State private var claudeKeychainStatusMessage: String?
+    @State private var keychainFixBannerMessage: String?
     @State private var editingAccountId: UUID? = nil
     @State private var editingLabel: String = ""
     @State private var showResetConfirmation = false
@@ -201,10 +204,76 @@ struct SettingsView: View {
         editingAccountId = nil
     }
 
+    // MARK: - Keychain quick fix (non-technical users)
+
+    private var keychainQuickFixCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Mac keeps asking for your password?", systemImage: "lock.shield")
+                .font(.headline)
+
+            Text("One tap turns off the setting that causes repeated Keychain popups. You can still use accounts you added in Usageview.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Button("Stop password popups") {
+                    applyStopPasswordPopups()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+
+                Button("Connect Claude Code once…") {
+                    connectClaudeCodeOnce()
+                }
+                .controlSize(.regular)
+            }
+
+            if let keychainFixBannerMessage {
+                Text(keychainFixBannerMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func applyStopPasswordPopups() {
+        KeychainPromptFixer.stopPasswordPopups(
+            claudeAuth: store.claudeAuth,
+            geminiOAuth: store.geminiAuth.oauthService
+        )
+        allowClaudeCLIKeychainAccess = false
+        allowGeminiCLIKeychainAccess = false
+        claudeKeychainPromptModeRaw = ClaudeKeychainPromptMode.never.rawValue
+        claudeKeychainReadStrategyRaw = ClaudeKeychainReadStrategy.securityCLIExperimental.rawValue
+        ClaudeKeychainReadStrategyPreference.set(.securityCLIExperimental)
+        claudeKeychainStatusMessage = nil
+        keychainFixBannerMessage = "CLI Keychain access is off. Popups from Usageview should stop."
+        KeychainPromptFixer.showStopPopupsConfirmation()
+    }
+
+    private func connectClaudeCodeOnce() {
+        KeychainPromptFixer.prepareClaudeCodeOneTimeAccess(claudeAuth: store.claudeAuth)
+        allowClaudeCLIKeychainAccess = true
+        claudeKeychainPromptModeRaw = ClaudeKeychainPromptMode.onlyOnUserAction.rawValue
+        KeychainPromptFixer.showClaudeCodeSetupInstructions()
+
+        let connected = store.claudeAuth.connectClaudeCodeKeychainOnce()
+        KeychainPromptFixer.showClaudeCodeConnectResult(success: connected)
+        keychainFixBannerMessage = connected
+            ? "Claude Code is linked. If popups continue, choose Always Allow on the next macOS dialog."
+            : "Could not read Claude Code. Try “Stop password popups” and sign in from the menu bar instead."
+    }
+
     // MARK: - General Content
 
     private var generalContent: some View {
         VStack(alignment: .leading, spacing: 16) {
+            keychainQuickFixCard
+
             // Menu Bar Icon Style
             settingsRow(icon: "gauge.medium", title: "Icon Style", subtitle: "Choose how the menu bar gauge is rendered") {
                 HStack(spacing: 8) {
@@ -329,9 +398,33 @@ struct SettingsView: View {
                 }
 
                 settingsRow(
+                    icon: "terminal",
+                    title: "Keychain Read Strategy",
+                    subtitle: "security CLI is recommended (CodexBar default); avoids most password popups"
+                ) {
+                    Picker("", selection: Binding(
+                        get: { claudeKeychainReadStrategyRaw },
+                        set: { newValue in
+                            claudeKeychainReadStrategyRaw = newValue
+                            if let strategy = ClaudeKeychainReadStrategy(rawValue: newValue) {
+                                ClaudeKeychainReadStrategyPreference.set(strategy)
+                            }
+                            store.claudeAuth.resetCLIKeychainReadSuppression()
+                        }
+                    )) {
+                        ForEach(ClaudeKeychainReadStrategy.allCases, id: \.rawValue) { strategy in
+                            Text(strategy.displayName).tag(strategy.rawValue)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 220)
+                    .disabled(!allowClaudeCLIKeychainAccess)
+                }
+
+                settingsRow(
                     icon: "exclamationmark.shield",
                     title: "Keychain Prompt Mode",
-                    subtitle: "Experimental: choose if macOS keychain prompts are allowed"
+                    subtitle: "Security.framework prompts only when allowed; CLI strategy uses file + security first"
                 ) {
                     Picker("", selection: Binding(
                         get: { claudeKeychainPromptModeRaw },
