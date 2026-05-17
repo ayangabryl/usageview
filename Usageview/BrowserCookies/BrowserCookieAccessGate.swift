@@ -14,7 +14,8 @@ enum BrowserCookieAccessGate {
     private static let defaultsKey = "browserCookieAccessDeniedUntil"
     private static let cooldownInterval: TimeInterval = 60 * 60 * 6
 
-    static func shouldAttempt(_ browser: Browser, now: Date = Date()) -> Bool {
+    /// - Parameter allowKeychainPrompt: When true (user tapped Import), still try Chromium browsers so macOS can show the one-time Safe Storage prompt.
+    static func shouldAttempt(_ browser: Browser, allowKeychainPrompt: Bool = false, now: Date = Date()) -> Bool {
         guard browser.usesKeychainForCookieDecryption else { return true }
         guard !KeychainAccessGate.isDisabled else { return false }
 
@@ -30,6 +31,7 @@ enum BrowserCookieAccessGate {
             return true
         }
         guard shouldCheckKeychain else { return false }
+        if allowKeychainPrompt { return true }
 
         let requiresInteraction = chromiumKeychainRequiresInteraction()
         return lock.withLock { state in
@@ -92,9 +94,12 @@ extension BrowserCookieClient {
     func gatedRecords(
         matching query: BrowserCookieQuery,
         in browser: Browser,
+        allowKeychainPrompt: Bool = false,
         logger: ((String) -> Void)? = nil
     ) throws -> [BrowserCookieStoreRecords] {
-        guard BrowserCookieAccessGate.shouldAttempt(browser) else { return [] }
+        guard BrowserCookieAccessGate.shouldAttempt(browser, allowKeychainPrompt: allowKeychainPrompt) else {
+            return []
+        }
         return try records(matching: query, in: browser, logger: logger)
     }
 }

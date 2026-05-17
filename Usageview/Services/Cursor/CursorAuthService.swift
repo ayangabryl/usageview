@@ -16,9 +16,9 @@ final class CursorAuthService: Sendable {
         loadToken(key: tokenKey(for: accountId)) != nil
     }
 
-    /// Import session cookies from Safari / Chrome / Arc (no manual copy-paste).
+    /// Import session cookies from Safari (recommended — no Chrome Keychain prompt).
     func saveFromBrowser(for accountId: UUID) throws -> CursorAccountInfo {
-        let session = try CursorCookieImporter.importSession()
+        let session = try CursorCookieImporter.importSession(allowKeychainPrompt: true)
         return saveToken(session.cookieHeader, for: accountId, sourceLabel: session.sourceLabel)
     }
 

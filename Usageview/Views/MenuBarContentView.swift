@@ -2683,7 +2683,7 @@ struct CursorInlineConnectView: View {
 
             ServiceIconView(serviceType: .cursor, avatarURL: nil, size: 48)
 
-            Text("Import from a browser where you’re signed in at cursor.com,\nor paste a session cookie manually.")
+            Text("Sign in at cursor.com in Safari, then tap Import below.\nSafari avoids the extra Keychain prompts that Chrome needs.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -2707,10 +2707,10 @@ struct CursorInlineConnectView: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Image(systemName: "globe")
+                        Image(systemName: "safari")
                             .font(.subheadline)
                     }
-                    Text(isImportingFromBrowser ? "Reading browser cookies…" : "Import from browser")
+                    Text(isImportingFromBrowser ? "Reading Safari cookies…" : "Import from Safari")
                         .font(.subheadline.weight(.medium))
                 }
                 .frame(maxWidth: .infinity)
@@ -2721,7 +2721,7 @@ struct CursorInlineConnectView: View {
             .disabled(isImportingFromBrowser)
             .padding(.horizontal, 16)
 
-            Text("Safari works without extra prompts. Chrome and Arc may ask for Keychain access once — choose Always Allow.")
+            Text("You can keep using Chrome for Cursor day to day — only Safari needs your cursor.com login for this one-time import.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -2758,7 +2758,7 @@ struct CursorInlineConnectView: View {
             .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImportingFromBrowser)
             .padding(.horizontal, 16)
 
-            Text("Manual: cursor.com → DevTools → Cookies → WorkosCursorSessionToken or full Cookie header.")
+            Text("Manual fallback: Safari → Develop → Show Web Inspector → Storage → Cookies → WorkosCursorSessionToken.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

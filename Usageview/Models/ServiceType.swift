@@ -84,7 +84,7 @@ enum ServiceType: String, Codable, CaseIterable, Sendable {
         case .codex: "Codex CLI (`codex` login → ~/.codex/auth.json)"
         case .gemini: "Google OAuth, API key, or Gemini CLI"
         case .kimi: "Kimi Code token (kimi-auth) or browser import"
-        case .cursor: "Browser session cookie import"
+        case .cursor: "Safari sign-in at cursor.com, then import (recommended)"
         case .openrouter: "API key"
         case .kiro: "kiro-cli login (recommended)"
         case .augment: "API key (usage coming soon)"

@@ -4,13 +4,23 @@ import SweetCookieKit
 typealias BrowserCookieImportOrder = [Browser]
 
 extension [Browser] {
-    func cookieImportCandidates() -> [Browser] {
-        Browser.defaultImportOrder.filter { browser in
+    func cookieImportCandidates(allowKeychainPrompt: Bool = false) -> [Browser] {
+        self.filter { browser in
             if KeychainAccessGate.isDisabled, browser.usesKeychainForCookieDecryption {
                 return false
             }
-            return BrowserCookieAccessGate.shouldAttempt(browser)
+            return BrowserCookieAccessGate.shouldAttempt(browser, allowKeychainPrompt: allowKeychainPrompt)
         }
+    }
+
+    /// Safari first for user-initiated import (no Chromium Keychain prompt).
+    static func userActionImportOrder() -> [Browser] {
+        var order = Browser.defaultImportOrder
+        if let index = order.firstIndex(of: .safari) {
+            let safari = order.remove(at: index)
+            order.insert(safari, at: 0)
+        }
+        return order
     }
 }
 

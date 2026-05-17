@@ -17,7 +17,7 @@ final class KimiAuthService: Sendable {
 
     /// Import kimi-auth from a browser where you are signed in at kimi.com.
     func saveFromBrowser(for accountId: UUID) throws -> KimiAccountInfo {
-        let session = try KimiCookieImporter.importSession()
+        let session = try KimiCookieImporter.importSession(allowKeychainPrompt: true)
         guard let token = session.authToken else {
             throw KimiCookieImportError.noCookies
         }

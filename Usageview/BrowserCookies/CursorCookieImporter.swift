@@ -4,11 +4,19 @@ import SweetCookieKit
 
 enum CursorCookieImportError: LocalizedError {
     case noSessionCookie
+    case keychainAccessDisabled
 
     var errorDescription: String? {
         switch self {
         case .noSessionCookie:
-            "No Cursor session found. Sign in at cursor.com in Safari, Chrome, or Arc, then try again."
+            [
+                "No Cursor session found in Safari.",
+                "",
+                "Open Safari, sign in at cursor.com, then tap Import from Safari again.",
+                "Or paste WorkosCursorSessionToken from Safari Web Inspector → Cookies.",
+            ].joined(separator: "\n")
+        case .keychainAccessDisabled:
+            "Browser import is off because “Stop password popups” is enabled in Settings. Paste your cookie manually, or turn that off and try again."
         }
     }
 }
@@ -42,15 +50,32 @@ enum CursorCookieImporter {
         }
     }
 
-    static func importSession(logger: ((String) -> Void)? = nil) throws -> SessionInfo {
-        let browsers = Browser.defaultImportOrder.cookieImportCandidates()
+    static func importSession(
+        allowKeychainPrompt: Bool = false,
+        logger: ((String) -> Void)? = nil
+    ) throws -> SessionInfo {
+        if KeychainAccessGate.isDisabled, allowKeychainPrompt {
+            throw CursorCookieImportError.keychainAccessDisabled
+        }
+
+        let browsers: [Browser] = allowKeychainPrompt
+            ? [.safari].cookieImportCandidates(allowKeychainPrompt: true)
+            : Browser.defaultImportOrder.cookieImportCandidates()
         for browser in browsers {
-            if let session = importSessionsIfPresent(browser: browser, logger: logger).first {
+            if let session = importSessionsIfPresent(
+                browser: browser,
+                allowKeychainPrompt: allowKeychainPrompt,
+                logger: logger
+            ).first {
                 return session
             }
         }
         for browser in browsers {
-            if let session = importDomainCookieSessionsIfPresent(browser: browser, logger: logger).first {
+            if let session = importDomainCookieSessionsIfPresent(
+                browser: browser,
+                allowKeychainPrompt: allowKeychainPrompt,
+                logger: logger
+            ).first {
                 return session
             }
         }
@@ -59,29 +84,46 @@ enum CursorCookieImporter {
 
     private static func importSessionsIfPresent(
         browser: Browser,
+        allowKeychainPrompt: Bool,
         logger: ((String) -> Void)?
     ) -> [SessionInfo] {
-        importCookiesFromBrowser(browser: browser, requireKnownSessionName: true, logger: logger)
+        importCookiesFromBrowser(
+            browser: browser,
+            requireKnownSessionName: true,
+            allowKeychainPrompt: allowKeychainPrompt,
+            logger: logger)
     }
 
     private static func importDomainCookieSessionsIfPresent(
         browser: Browser,
+        allowKeychainPrompt: Bool,
         logger: ((String) -> Void)?
     ) -> [SessionInfo] {
-        importCookiesFromBrowser(browser: browser, requireKnownSessionName: false, logger: logger)
+        importCookiesFromBrowser(
+            browser: browser,
+            requireKnownSessionName: false,
+            allowKeychainPrompt: allowKeychainPrompt,
+            logger: logger)
     }
 
     private static func importCookiesFromBrowser(
         browser: Browser,
         requireKnownSessionName: Bool,
+        allowKeychainPrompt: Bool,
         logger: ((String) -> Void)?
     ) -> [SessionInfo] {
         let log: (String) -> Void = { msg in logger?("[cursor-cookie] \(msg)") }
-        guard BrowserCookieAccessGate.shouldAttempt(browser) else { return [] }
+        guard BrowserCookieAccessGate.shouldAttempt(browser, allowKeychainPrompt: allowKeychainPrompt) else {
+            return []
+        }
 
         do {
             let query = BrowserCookieQuery(domains: cookieDomains)
-            let sources = try cookieClient.gatedRecords(matching: query, in: browser, logger: log)
+            let sources = try cookieClient.gatedRecords(
+                matching: query,
+                in: browser,
+                allowKeychainPrompt: allowKeychainPrompt,
+                logger: log)
             var sessions: [SessionInfo] = []
             for source in sources where !source.records.isEmpty {
                 let httpCookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)

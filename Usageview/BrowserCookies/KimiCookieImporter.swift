@@ -26,19 +26,25 @@ enum KimiCookieImporter {
         }
     }
 
-    static func importSession(logger: ((String) -> Void)? = nil) throws -> SessionInfo {
-        let sessions = try importSessions(logger: logger)
+    static func importSession(allowKeychainPrompt: Bool = false, logger: ((String) -> Void)? = nil) throws -> SessionInfo {
+        let sessions = try importSessions(allowKeychainPrompt: allowKeychainPrompt, logger: logger)
         guard let first = sessions.first else {
             throw KimiCookieImportError.noCookies
         }
         return first
     }
 
-    static func importSessions(logger: ((String) -> Void)? = nil) throws -> [SessionInfo] {
+    static func importSessions(allowKeychainPrompt: Bool = false, logger: ((String) -> Void)? = nil) throws -> [SessionInfo] {
         var sessions: [SessionInfo] = []
-        for browser in Browser.defaultImportOrder.cookieImportCandidates() {
+        let browsers = allowKeychainPrompt
+            ? [Browser].userActionImportOrder().cookieImportCandidates(allowKeychainPrompt: true)
+            : Browser.defaultImportOrder.cookieImportCandidates()
+        for browser in browsers {
             do {
-                sessions.append(contentsOf: try importSessions(from: browser, logger: logger))
+                sessions.append(contentsOf: try importSessions(
+                    from: browser,
+                    allowKeychainPrompt: allowKeychainPrompt,
+                    logger: logger))
             } catch {
                 BrowserCookieAccessGate.recordIfNeeded(error)
             }
@@ -51,11 +57,16 @@ enum KimiCookieImporter {
 
     private static func importSessions(
         from browser: Browser,
+        allowKeychainPrompt: Bool,
         logger: ((String) -> Void)?
     ) throws -> [SessionInfo] {
         let query = BrowserCookieQuery(domains: cookieDomains)
         let log: (String) -> Void = { msg in logger?("[kimi-cookie] \(msg)") }
-        let sources = try cookieClient.gatedRecords(matching: query, in: browser, logger: log)
+        let sources = try cookieClient.gatedRecords(
+            matching: query,
+            in: browser,
+            allowKeychainPrompt: allowKeychainPrompt,
+            logger: log)
 
         var sessions: [SessionInfo] = []
         let grouped = Dictionary(grouping: sources, by: { $0.store.profile.id })
