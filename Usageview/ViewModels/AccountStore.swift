@@ -962,8 +962,19 @@ final class AccountStore {
         let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
         var codexStillRunning = !running.isEmpty
 
-        // ── Step 1: First write of Account B's tokens ──
+        // ── Step 0: Refresh the outgoing account's snapshot from the CURRENT auth.json ──
+        // Codex refreshes OAuth tokens while running; if we don't capture those refreshed
+        // tokens now, the next switch-back to this account will fail with
+        // "refresh token already used".
         let fileURL = authFileURL(from: homeURL)
+        let accessingPre = homeURL.startAccessingSecurityScopedResource()
+        let allCandidates = accounts
+            .filter { $0.serviceType == .chatgpt && codexAuth.hasSavedSession(for: $0.id) && $0.id != account.id }
+            .map(\.id)
+        codexAuth.refreshOutgoingSnapshots(for: allCandidates, authFileURL: fileURL)
+        if accessingPre { homeURL.stopAccessingSecurityScopedResource() }
+
+        // ── Step 1: First write of Account B's tokens ──
         let accessing = homeURL.startAccessingSecurityScopedResource()
         do {
             _ = try codexAuth.activateSession(for: account.id, writingTo: fileURL)
@@ -1002,6 +1013,11 @@ final class AccountStore {
         //             Account A tokens during its shutdown sequence), then reopen ──
         if !codexStillRunning {
             let a2 = homeURL.startAccessingSecurityScopedResource()
+            // Capture any refreshed tokens Codex wrote during shutdown before overwriting.
+            let outgoing2 = accounts
+                .filter { $0.serviceType == .chatgpt && codexAuth.hasSavedSession(for: $0.id) && $0.id != account.id }
+                .map(\.id)
+            codexAuth.refreshOutgoingSnapshots(for: outgoing2, authFileURL: fileURL)
             _ = try? codexAuth.activateSession(for: account.id, writingTo: fileURL)
             if a2 { homeURL.stopAccessingSecurityScopedResource() }
             reopenCodexDesktopApp()
@@ -1035,6 +1051,12 @@ final class AccountStore {
             // Codex has fully exited — safe to write Account B's tokens now (nothing can overwrite).
             t.invalidate()
             let a = homeURL.startAccessingSecurityScopedResource()
+            // Capture any token refreshes Codex performed during its final session
+            // before we overwrite auth.json with Account B's tokens.
+            let outgoing = self.accounts
+                .filter { $0.serviceType == .chatgpt && self.codexAuth.hasSavedSession(for: $0.id) && $0.id != account.id }
+                .map(\.id)
+            self.codexAuth.refreshOutgoingSnapshots(for: outgoing, authFileURL: fileURL)
             _ = try? self.codexAuth.activateSession(for: account.id, writingTo: fileURL)
             if a { homeURL.stopAccessingSecurityScopedResource() }
             self.reopenCodexDesktopApp()

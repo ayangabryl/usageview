@@ -123,6 +123,29 @@ final class CodexAuthService: Sendable {
         return savedToken == currentCreds.accessToken
     }
 
+    /// Reads `authFileURL` and, for each candidate UUID whose saved `account_id` matches
+    /// the file's current `account_id`, updates the stored snapshot with the fresh tokens.
+    ///
+    /// Call this BEFORE overwriting auth.json when switching accounts. Codex refreshes OAuth
+    /// tokens while running; this ensures the "outgoing" account's snapshot stays current so
+    /// the NEXT switch back to that account doesn't fail with "refresh token already used".
+    func refreshOutgoingSnapshots(for candidates: [UUID], authFileURL: URL) {
+        guard let data = try? Data(contentsOf: authFileURL),
+              let rawString = String(data: data, encoding: .utf8),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let creds = try? parseCredentials(from: json)
+        else { return }
+
+        for id in candidates {
+            if let currentId = creds.accountId,
+               let savedId = loadToken(key: accountIdKey(for: id)),
+               !savedId.isEmpty, savedId == currentId {
+                saveToken(key: tokenKey(for: id), value: creds.accessToken)
+                saveToken(key: authSnapshotKey(for: id), value: rawString)
+            }
+        }
+    }
+
     /// Make this account the active Codex session by restoring its saved auth.json snapshot.
     func activateSession(for accountId: UUID) throws -> CodexAccountInfo {
         guard let snapshotRaw = loadToken(key: authSnapshotKey(for: accountId)) else {
