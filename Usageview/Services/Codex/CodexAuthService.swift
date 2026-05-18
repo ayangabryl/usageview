@@ -135,10 +135,22 @@ final class CodexAuthService: Sendable {
     }
 
     func chatgptAccountId(for accountId: UUID) -> String? {
-        if let stored = loadAccountId(key: accountIdKey(for: accountId)) {
-            return stored
-        }
+        if let id = snapshotChatgptAccountId(for: accountId), !id.isEmpty { return id }
         return try? loadCLIAuth().accountId
+    }
+
+    /// OpenAI `account_id` from this row's **persisted** Codex snapshot only (keychain + JSON).
+    /// Never reads live `auth.json` on disk — avoids every row inheriting the same on-disk id.
+    func snapshotChatgptAccountId(for accountId: UUID) -> String? {
+        if let id = storedSnapshotChatgptAccountId(for: accountId) { return id }
+        guard let raw = loadToken(key: authSnapshotKey(for: accountId)),
+              let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let creds = try? parseCredentials(from: json),
+              let id = creds.accountId,
+              !id.isEmpty
+        else { return nil }
+        return id
     }
 
     func disconnect(accountId: UUID) {
