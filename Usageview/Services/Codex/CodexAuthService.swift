@@ -32,9 +32,42 @@ final class CodexAuthService: Sendable {
         return try saveSnapshot(snapshot, for: accountId)
     }
 
-    /// Restore a saved session by writing auth.json to `authFileURL`.
-    /// The caller must already hold an active security-scoped resource on the parent directory.
-    func activateSession(for accountId: UUID, writingTo authFileURL: URL) throws -> CodexAccountInfo {
+    /// Both locations Codex may use under a real macOS user home (CLI vs Desktop).
+    static func authJSONURLsUnderUserHome(_ home: URL) -> [URL] {
+        if home.lastPathComponent == ".codex" {
+            let parent = home.deletingLastPathComponent()
+            return [
+                home.appendingPathComponent("auth.json"),
+                parent.appendingPathComponent("Library/Application Support/Codex/auth.json"),
+            ]
+        }
+        return [
+            home.appendingPathComponent(".codex/auth.json"),
+            home.appendingPathComponent("Library/Application Support/Codex/auth.json"),
+        ]
+    }
+
+    /// Prefer an existing `auth.json` under `home` (same order as global discovery), else `~/.codex/auth.json`.
+    static func preferredAuthJSONURLForRead(underUserHome home: URL) -> URL {
+        if home.lastPathComponent == ".codex" {
+            let parent = home.deletingLastPathComponent()
+            let direct = home.appendingPathComponent("auth.json")
+            let appSup = parent.appendingPathComponent("Library/Application Support/Codex/auth.json")
+            if FileManager.default.fileExists(atPath: direct.path) { return direct }
+            if FileManager.default.fileExists(atPath: appSup.path) { return appSup }
+            return direct
+        }
+        for url in authJSONURLsUnderUserHome(home) {
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return home.appendingPathComponent(".codex/auth.json")
+    }
+
+    /// Restore a saved session by writing the snapshot to **every** Codex `auth.json` location
+    /// under the security-scoped user home. Codex Desktop often uses Application Support while
+    /// the CLI uses `~/.codex`; writing only one left the app stuck on the previous account.
+    /// The caller must hold security scope on `userHomeDirectory`.
+    func activateSession(for accountId: UUID, userHomeDirectory homeURL: URL) throws -> CodexAccountInfo {
         guard let snapshotRaw = loadToken(key: authSnapshotKey(for: accountId)) else {
             throw CodexAuthError.noSavedSession
         }
@@ -45,9 +78,11 @@ final class CodexAuthService: Sendable {
         }
 
         let writeData = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
-        let directory = authFileURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try writeData.write(to: authFileURL, options: .atomic)
+        for authURL in Self.authJSONURLsUnderUserHome(homeURL) {
+            let directory = authURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try writeData.write(to: authURL, options: .atomic)
+        }
 
         let creds = try parseCredentials(from: json)
         saveToken(key: tokenKey(for: accountId), value: creds.accessToken)

@@ -862,9 +862,10 @@ final class AccountStore {
     }
 
     // MARK: - OAuth session helpers
-    // OAuth (ChatGPT) accounts store their tokens in ~/.codex/auth.json.
+    // ChatGPT OAuth + Codex: tokens live in auth.json. Codex Desktop often uses
+    // ~/Library/Application Support/Codex/auth.json while the CLI uses ~/.codex/auth.json.
     // The sandbox blocks direct access, so we bookmark the user's HOME directory
-    // (always visible in the file picker) and derive ~/.codex/auth.json from it.
+    // (always visible in the file picker) and read/write both paths when switching.
 
     private static let codexHomeDirBookmarkKey = "CodexHomeDirBookmarkV1"
 
@@ -1003,16 +1004,11 @@ final class AccountStore {
         codexAuthWatcherDirSource = nil
     }
 
-    /// Reads auth.json and refreshes any saved account snapshot whose account_id matches.
-    /// Runs silently — no UI, no prompts. Called both by the timer and the file watcher.
-    @MainActor
-    private func syncCodexSnapshotsFromDisk() {
-        guard let homeURL = resolveHomeDirSilent() else { return }
-        let fileURL = authFileURL(from: homeURL)
-        let accessing = homeURL.startAccessingSecurityScopedResource()
-        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
-
-        let candidates = accounts.compactMap { account -> UUID? in
+    /// ChatGPT accounts whose saved Codex snapshot matches that row’s OpenAI identity (OAuth),
+    /// so we never refresh the wrong row from on-disk `auth.json` during a switch.
+    private func codexSnapshotRefreshCandidateIds(excluding excludedId: UUID? = nil) -> [UUID] {
+        accounts.compactMap { account -> UUID? in
+            if let excludedId, account.id == excludedId { return nil }
             guard account.serviceType == .chatgpt, codexAuth.hasSavedSession(for: account.id) else { return nil }
             if isCodexOAuth(account) {
                 guard let oauth = openaiAuth.chatgptAccountId(for: account.id), !oauth.isEmpty,
@@ -1021,6 +1017,18 @@ final class AccountStore {
             }
             return account.id
         }
+    }
+
+    /// Reads auth.json and refreshes any saved account snapshot whose account_id matches.
+    /// Runs silently — no UI, no prompts. Called both by the timer and the file watcher.
+    @MainActor
+    private func syncCodexSnapshotsFromDisk() {
+        guard let homeURL = resolveHomeDirSilent() else { return }
+        let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
+        let accessing = homeURL.startAccessingSecurityScopedResource()
+        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
+
+        let candidates = codexSnapshotRefreshCandidateIds()
         codexAuth.refreshOutgoingSnapshots(for: candidates, authFileURL: fileURL)
 
         autoBindOrHealOAuthCodexSnapshotsIfDiskMatchesCurrentUser(authFileURL: fileURL)
@@ -1050,17 +1058,6 @@ final class AccountStore {
         }
     }
 
-    /// Resolves auth.json URL from a home directory security-scoped URL.
-    /// Checks both ~/.codex/auth.json (standard) and the directory itself if it IS .codex.
-    private func authFileURL(from homeURL: URL) -> URL {
-        // If the user somehow selected the .codex dir itself, handle gracefully.
-        let lastComponent = homeURL.lastPathComponent
-        if lastComponent == ".codex" {
-            return homeURL.appendingPathComponent("auth.json")
-        }
-        return homeURL.appendingPathComponent(".codex/auth.json")
-    }
-
     func hasSavedCodexOAuthSession(for account: Account) -> Bool {
         guard isCodexOAuth(account) else { return false }
         return codexAuth.hasSavedSession(for: account.id)
@@ -1078,7 +1075,7 @@ final class AccountStore {
         let accessing = homeURL.startAccessingSecurityScopedResource()
         defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
 
-        let fileURL = authFileURL(from: homeURL)
+        let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
         do {
             let info = try codexAuth.connectFromCLI(for: account.id, authFileURL: fileURL)
             if let index = accounts.firstIndex(where: { $0.id == account.id }) {
@@ -1095,13 +1092,12 @@ final class AccountStore {
     /// Switch Codex Desktop to the saved OAuth session for this account.
     ///
     /// Strategy:
-    ///  1. Write Account B's tokens to auth.json (initial write).
-    ///  2. Try to quit Codex (AppleScript → terminate → forceTerminate).
-    ///  3a. Quit succeeded: write tokens AGAIN (Codex may have written Account A on exit),
-    ///      then reopen → Codex reads Account B. ✓
-    ///  3b. Quit failed: start a watcher that re-writes Account B's tokens every 2 s
-    ///      (counters any in-memory token refreshes by Codex) AND writes them one final
-    ///      time right after Codex exits — before relaunching. ✓
+    ///  1. Quit Codex / ChatGPT (do not write foreign tokens while they are running).
+    ///  2. Refresh other rows’ snapshots from disk only when snapshot matches that row’s OAuth id.
+    ///  3. Write this account’s snapshot to **both** `~/.codex/auth.json` and
+    ///     `~/Library/Application Support/Codex/auth.json`, then reopen Codex.
+    ///     (Desktop often reads App Support; writing only `~/.codex` left the old account.)
+    ///  4. If quit fails, a timer waits for exit then performs the same write + reopen.
     func activateCodexOAuthSession(for account: Account) async -> String? {
         guard let homeURL = resolveHomeDirWithPermission() else {
             return nil  // user cancelled
@@ -1111,7 +1107,7 @@ final class AccountStore {
         let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
         var codexStillRunning = !running.isEmpty
 
-        let fileURL = authFileURL(from: homeURL)
+        let primaryReadURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
 
         // ── Step 1: Verify Account B has a saved session before touching anything ──
         guard codexAuth.hasSavedSession(for: account.id) else {
@@ -1151,12 +1147,10 @@ final class AccountStore {
             // Refresh outgoing account's snapshot from auth.json BEFORE overwriting.
             // Codex may have refreshed its OAuth tokens during the session; capturing
             // those fresh tokens ensures the next switch-back doesn't fail.
-            let outgoing = accounts
-                .filter { $0.serviceType == .chatgpt && codexAuth.hasSavedSession(for: $0.id) && $0.id != account.id }
-                .map(\.id)
-            codexAuth.refreshOutgoingSnapshots(for: outgoing, authFileURL: fileURL)
+            let outgoing = codexSnapshotRefreshCandidateIds(excluding: account.id)
+            codexAuth.refreshOutgoingSnapshots(for: outgoing, authFileURL: primaryReadURL)
             do {
-                _ = try codexAuth.activateSession(for: account.id, writingTo: fileURL)
+                _ = try codexAuth.activateSession(for: account.id, userHomeDirectory: homeURL)
             } catch {
                 if a { homeURL.stopAccessingSecurityScopedResource() }
                 return error.localizedDescription
@@ -1171,13 +1165,13 @@ final class AccountStore {
         //    Watcher runs every 2 s:
         //      • While Codex is alive  → re-write Account B tokens (counters Codex refresh writes)
         //      • Once Codex exits      → write Account B tokens one last time, then reopen ──
-        startCodexReopenWatcher(for: account, homeURL: homeURL, fileURL: fileURL)
+        startCodexReopenWatcher(for: account, homeURL: homeURL)
         return "✓ Account switched. Codex won't close automatically — press ⌘Q in Codex and it will reopen as the new account."
     }
 
     /// Waits for Codex to exit (up to 5 minutes), then writes Account B's tokens and relaunches.
     /// Does NOT re-write while Codex is running — that would invalidate OAuth refresh tokens.
-    private func startCodexReopenWatcher(for account: Account, homeURL: URL, fileURL: URL) {
+    private func startCodexReopenWatcher(for account: Account, homeURL: URL) {
         let bundleIds = ["com.openai.chat", "com.openai.codex"]
         var attemptsLeft = 150   // up to 5 minutes
 
@@ -1193,13 +1187,12 @@ final class AccountStore {
             // Codex has fully exited — safe to write Account B's tokens now (nothing can overwrite).
             t.invalidate()
             let a = homeURL.startAccessingSecurityScopedResource()
+            let primaryReadURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
             // Capture any token refreshes Codex performed during its final session
             // before we overwrite auth.json with Account B's tokens.
-            let outgoing = self.accounts
-                .filter { $0.serviceType == .chatgpt && self.codexAuth.hasSavedSession(for: $0.id) && $0.id != account.id }
-                .map(\.id)
-            self.codexAuth.refreshOutgoingSnapshots(for: outgoing, authFileURL: fileURL)
-            _ = try? self.codexAuth.activateSession(for: account.id, writingTo: fileURL)
+            let outgoing = self.codexSnapshotRefreshCandidateIds(excluding: account.id)
+            self.codexAuth.refreshOutgoingSnapshots(for: outgoing, authFileURL: primaryReadURL)
+            _ = try? self.codexAuth.activateSession(for: account.id, userHomeDirectory: homeURL)
             if a { homeURL.stopAccessingSecurityScopedResource() }
             self.reopenCodexDesktopApp()
             Task { await self.refreshAccount(account) }
