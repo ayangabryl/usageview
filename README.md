@@ -2,13 +2,24 @@
 
 **Keep your AI usage limits visible — right in the menu bar.**
 
-Usageview is a lightweight macOS app that shows how much of your AI quota you've used across Claude, GitHub Copilot, OpenAI, Gemini, and Kimi — with reset countdowns so you always know when you get more.
+Usageview is a lightweight macOS menu bar app that tracks your AI quota across every major provider — so you always know how much you have left and when it resets.
 
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue?style=flat-square)](https://www.apple.com/macos/)
 [![Swift 6](https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white)](https://swift.org)
+[![Latest Release](https://img.shields.io/github/v/release/ayangabryl/Usageview?style=flat-square&label=download&color=brightgreen)](https://github.com/ayangabryl/Usageview/releases/latest)
 [![MIT License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-<!-- Add a screenshot here: ![Usageview Screenshot](screenshots/screenshot.png) -->
+---
+
+## Download
+
+**[⬇ Download the latest release (DMG)](https://github.com/ayangabryl/Usageview/releases/latest)**
+
+1. Download `Usageview-x.x.x.dmg`
+2. Open the DMG and drag **Usageview** to your Applications folder
+3. Open Usageview — it appears in your menu bar, no Dock icon
+
+> **Requirements:** macOS 14 (Sonoma) or later · Apple Silicon or Intel
 
 ---
 
@@ -19,6 +30,7 @@ If you use AI coding tools, you've hit rate limits mid-flow. Usageview sits in y
 - **How much quota you've used** — per provider, per account
 - **When it resets** — countdown timers for each rate window
 - **Multiple accounts** — track personal + work accounts side by side
+- **Codex account switching** — save sessions and switch between Codex accounts without logging out
 
 No Dock icon. No background noise. Just a glance at your menu bar.
 
@@ -30,27 +42,34 @@ No Dock icon. No background noise. Just a glance at your menu bar.
 |:---------|:-----|:-------------|
 | **Claude** | OAuth or API key | 5-hour + 7-day utilization with reset countdowns |
 | **GitHub Copilot** | Device flow sign-in | Premium requests used (e.g. 142/300), reset date |
-| **OpenAI** | OAuth or API key | Plan tier (Free/Plus/Pro/Team/Enterprise) |
-| **Gemini** | API key | Available models, Pro/Ultra detection |
+| **OpenAI / Codex** | OAuth or API key | Plan tier, Codex session switching |
+| **Cursor** | Browser cookie | Usage stats and plan info |
+| **Gemini** | API key or OAuth | Available models, Pro/Ultra detection |
 | **Kimi AI** | API key | Connection status |
+| **Kiro** | API key | Connection status |
+| **Augment** | API key | Connection status |
+| **JetBrains AI** | API key | Connection status |
+| **OpenRouter** | API key | Connection status |
+| **Zai** | API key | Connection status |
 
-> Want another provider? [Open an issue](https://github.com/ayangabryl/Usageview/issues/new?template=new_provider.md) or [submit a PR](CONTRIBUTING.md#adding-a-new-provider).
+> Want another provider? [Open an issue](https://github.com/ayangabryl/Usageview/issues/new) or submit a PR.
 
 ---
 
-## Install
+## Features
 
-**Requirements:** macOS 14 (Sonoma) or later
-
-### Build from source
-
-```bash
-git clone https://github.com/ayangabryl/Usageview.git
-cd Usageview
-open Usageview.xcodeproj
-```
-
-Hit **⌘R** in Xcode to build and run.
+| Feature | Details |
+|:--------|:--------|
+| Menu bar native | No Dock icon, minimal footprint |
+| Multiple accounts | Personal + work accounts per provider |
+| Codex account switching | Save sessions, switch without re-authenticating |
+| Claude dual windows | 5-hour and 7-day rate limits shown simultaneously |
+| Expanded & compact views | Toggle between detailed cards and dense rows |
+| Auto-refresh | Configurable: 5m / 15m / 30m / 1h |
+| Launch at login | Start with your Mac |
+| Secure storage | macOS Keychain with team-bound access groups |
+| Over-the-air updates | Built-in updater via Sparkle |
+| OAuth + API key | Choose your preferred auth per provider |
 
 ---
 
@@ -65,24 +84,19 @@ Switch between **expanded** (detailed cards) and **compact** (dense rows) views 
 
 ---
 
-## Features
+## Build from Source
 
-| Feature | Details |
-|:--------|:--------|
-| Menu bar native | No Dock icon, minimal footprint |
-| Multiple accounts | Personal + work accounts per provider |
-| Claude dual windows | 5-hour and 7-day rate limits shown simultaneously |
-| Expanded & compact views | Toggle between detailed cards and dense rows |
-| Auto-refresh | Configurable: 5m / 15m / 30m / 1h |
-| Launch at login | Start with your Mac |
-| Secure storage | macOS Keychain — no plaintext secrets |
-| OAuth + API key | Choose your preferred auth per provider |
+```bash
+git clone https://github.com/ayangabryl/Usageview.git
+cd Usageview
+open Usageview.xcodeproj
+```
+
+Hit **⌘R** in Xcode to build and run. Requires Xcode 16+ with Swift 6.2 toolchain.
 
 ---
 
 ## Contributing
-
-We'd love your help! Whether it's a bug fix, new provider, or UI improvement.
 
 ```bash
 git clone https://github.com/ayangabryl/Usageview.git
@@ -93,36 +107,6 @@ make lint     # check code style
 ```
 
 The pre-commit hook runs SwiftLint automatically — no extra steps needed.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide, including how to add a new provider.
-
----
-
-## Architecture
-
-```
-Usageview/
-├── App/                          # Entry point
-│   └── UsageviewApp.swift
-├── Models/                       # Data types
-│   ├── Account.swift
-│   ├── AuthMethod.swift
-│   └── ServiceType.swift
-├── Services/                     # Provider integrations
-│   ├── Anthropic/                #   Claude
-│   ├── GitHub/                   #   Copilot
-│   ├── OpenAI/                   #   OpenAI
-│   ├── Gemini/                   #   Gemini
-│   └── Kimi/                     #   Kimi AI
-├── ViewModels/                   # State management
-│   └── AccountStore.swift
-├── Views/                        # UI components
-│   ├── MenuBarContentView.swift
-│   ├── SettingsView.swift
-│   └── AccountCardView.swift
-└── Extensions/                   # Utilities
-    └── Color+Hex.swift
-```
 
 ---
 
