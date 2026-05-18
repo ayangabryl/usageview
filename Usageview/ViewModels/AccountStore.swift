@@ -949,6 +949,8 @@ final class AccountStore {
     private var codexAuthWatcherAppSupportDirSource: DispatchSourceFileSystemObject?
     /// Home URL security scope held while Codex auth directory watchers are active.
     private var codexWatcherScopedHomeURL: URL?
+    /// Only one pending "reopen after user quits Codex" timer at a time.
+    private var codexOAuthReopenTimer: Timer?
 
     /// Starts a 3-second timer plus directory watchers on `~/.codex` and Codex Application Support
     /// so token refreshes are synced into saved snapshots quickly.
@@ -1127,6 +1129,9 @@ final class AccountStore {
     ///     (Desktop often reads App Support; writing only `~/.codex` left the old account.)
     ///  4. If quit fails, a timer waits for exit then performs the same write + reopen.
     func activateCodexOAuthSession(for account: Account) async -> String? {
+        codexOAuthReopenTimer?.invalidate()
+        codexOAuthReopenTimer = nil
+
         guard let homeURL = resolveHomeDirWithPermission() else {
             return nil  // user cancelled
         }
@@ -1195,20 +1200,26 @@ final class AccountStore {
 
     /// Polls every 2s until Codex/ChatGPT have quit, then writes the target snapshot and reopens Codex.
     private func startCodexReopenWatcher(for account: Account, homeURL: URL) {
+        codexOAuthReopenTimer?.invalidate()
+
         let bundleIds = ["com.openai.chat", "com.openai.codex"]
         var attemptsLeft = 150   // up to 5 minutes
 
-        var timer: Timer?
-        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] t in
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
             attemptsLeft -= 1
-            if attemptsLeft <= 0 { t.invalidate(); return }
+            if attemptsLeft <= 0 {
+                t.invalidate()
+                self.codexOAuthReopenTimer = nil
+                return
+            }
 
             let alive = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
             guard alive.isEmpty else { return }
 
             // Codex has fully exited — safe to write Account B's tokens now (nothing can overwrite).
             t.invalidate()
+            self.codexOAuthReopenTimer = nil
             let a = homeURL.startAccessingSecurityScopedResource()
             let primaryReadURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
             // Capture any token refreshes Codex performed during its final session
@@ -1220,7 +1231,8 @@ final class AccountStore {
             self.reopenCodexDesktopApp()
             Task { await self.refreshAccount(account) }
         }
-        if let t = timer { RunLoop.main.add(t, forMode: .common) }
+        RunLoop.main.add(timer, forMode: .common)
+        codexOAuthReopenTimer = timer
     }
 
     func canSwitchCodexSession(for account: Account) -> Bool {

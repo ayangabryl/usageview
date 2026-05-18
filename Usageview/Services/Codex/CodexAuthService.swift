@@ -10,7 +10,8 @@ struct CodexAccountInfo: Sendable {
 final class CodexAuthService: Sendable {
 
     func isAuthenticated(for accountId: UUID) -> Bool {
-        loadToken(key: tokenKey(for: accountId)) != nil || (try? loadCLIAuth()) != nil
+        // Per-account only: never treat "some auth.json exists on disk" as every row connected.
+        loadToken(key: tokenKey(for: accountId)) != nil || hasSavedSession(for: accountId)
     }
 
     /// Import OAuth token from `~/.codex/auth.json` (Codex CLI login).
@@ -159,17 +160,7 @@ final class CodexAuthService: Sendable {
         if let stored = loadToken(key: tokenKey(for: accountId)) {
             return stored
         }
-        if let snapshot = try? loadCLIAuthSnapshot() {
-            let creds = snapshot.credentials
-            saveToken(key: tokenKey(for: accountId), value: creds.accessToken)
-            if let accountIdString = creds.accountId {
-                saveToken(key: accountIdKey(for: accountId), value: accountIdString)
-            } else {
-                removeToken(key: accountIdKey(for: accountId))
-            }
-            saveToken(key: authSnapshotKey(for: accountId), value: snapshot.rawJSONString)
-            return creds.accessToken
-        }
+        // Do not import anonymous on-disk auth into this accountId — wrong user on multi-account Macs.
         return nil
     }
 
