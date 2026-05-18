@@ -41,13 +41,14 @@ final class CodexAuthService: Sendable {
                 parent.appendingPathComponent("Library/Application Support/Codex/auth.json"),
             ]
         }
+        // Write both; Application Support first so a crash mid-run leaves Desktop path updated first.
         return [
-            home.appendingPathComponent(".codex/auth.json"),
             home.appendingPathComponent("Library/Application Support/Codex/auth.json"),
+            home.appendingPathComponent(".codex/auth.json"),
         ]
     }
 
-    /// Prefer an existing `auth.json` under `home` (same order as global discovery), else `~/.codex/auth.json`.
+    /// Prefer an existing `auth.json` under `home` (Desktop path first), else `~/.codex/auth.json`.
     static func preferredAuthJSONURLForRead(underUserHome home: URL) -> URL {
         if home.lastPathComponent == ".codex" {
             let parent = home.deletingLastPathComponent()
@@ -57,10 +58,13 @@ final class CodexAuthService: Sendable {
             if FileManager.default.fileExists(atPath: appSup.path) { return appSup }
             return direct
         }
-        for url in authJSONURLsUnderUserHome(home) {
-            if FileManager.default.fileExists(atPath: url.path) { return url }
-        }
-        return home.appendingPathComponent(".codex/auth.json")
+        // Prefer Application Support when both exist: Codex Desktop usually writes there, while
+        // `~/.codex` may be an older CLI file — reading `.codex` first caused stale sync / switch.
+        let appSup = home.appendingPathComponent("Library/Application Support/Codex/auth.json")
+        let dotCodex = home.appendingPathComponent(".codex/auth.json")
+        if FileManager.default.fileExists(atPath: appSup.path) { return appSup }
+        if FileManager.default.fileExists(atPath: dotCodex.path) { return dotCodex }
+        return dotCodex
     }
 
     /// Restore a saved session by writing the snapshot to **every** Codex `auth.json` location
@@ -350,8 +354,9 @@ final class CodexAuthService: Sendable {
             candidates.append(URL(fileURLWithPath: codexHome).appendingPathComponent("auth.json"))
         }
         let home = realHomeDirectory()
-        candidates.append(home.appendingPathComponent(".codex/auth.json"))
+        // Desktop auth.json first when probing the real home (matches preferredAuthJSONURLForRead).
         candidates.append(home.appendingPathComponent("Library/Application Support/Codex/auth.json"))
+        candidates.append(home.appendingPathComponent(".codex/auth.json"))
 
         var unique: [URL] = []
         for candidate in candidates {

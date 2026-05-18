@@ -899,7 +899,7 @@ final class AccountStore {
 
         // Prompt user to select their home folder (always visible, no hidden files needed).
         let panel = NSOpenPanel()
-        panel.message = "Select your home folder (e.g. \"/Users/\(NSUserName())\") so Usageview can access ~/.codex/auth.json to save and switch Codex accounts."
+        panel.message = "Select your home folder (e.g. \"/Users/\(NSUserName())\") so Usageview can read and update Codex auth files under ~/.codex and Library/Application Support/Codex."
         panel.prompt = "Grant Access"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -943,15 +943,15 @@ final class AccountStore {
     // MARK: - Live Codex snapshot sync (timer + file watcher)
 
     private var codexSnapshotTimer: Timer?
-    private var codexAuthFileSource: DispatchSourceFileSystemObject?
-    private var codexAuthWatcherFD: Int32 = -1
     private var codexAuthWatcherDirFD: Int32 = -1
     private var codexAuthWatcherDirSource: DispatchSourceFileSystemObject?
+    private var codexAuthWatcherAppSupportDirFD: Int32 = -1
+    private var codexAuthWatcherAppSupportDirSource: DispatchSourceFileSystemObject?
+    /// Home URL security scope held while Codex auth directory watchers are active.
+    private var codexWatcherScopedHomeURL: URL?
 
-    /// Starts both a 3-second fallback timer AND a DispatchSource file watcher on
-    /// ~/.codex/ so every token refresh Codex makes is captured within milliseconds.
-    /// Keeps every saved Codex session snapshot up-to-date so the next switch always
-    /// uses fresh (non-revoked) tokens, regardless of OAuth rotation timing.
+    /// Starts a 3-second timer plus directory watchers on `~/.codex` and Codex Application Support
+    /// so token refreshes are synced into saved snapshots quickly.
     func startCodexSnapshotRefreshTimer() {
         codexSnapshotTimer?.invalidate()
         let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
@@ -963,45 +963,74 @@ final class AccountStore {
         startCodexAuthFileWatcher()
     }
 
-    /// Watches ~/.codex/ directory for changes (handles atomic rename-based writes that
-    /// Codex uses when flushing token refreshes) and syncs snapshots immediately.
+    /// Watches `~/.codex` and `~/Library/Application Support/Codex` for auth.json changes.
     private func startCodexAuthFileWatcher() {
         stopCodexAuthFileWatcher()
         guard let homeURL = resolveHomeDirSilent() else { return }
-        let dirURL = homeURL.appendingPathComponent(".codex")
-        let scopeActive = homeURL.startAccessingSecurityScopedResource()
+        guard homeURL.startAccessingSecurityScopedResource() else { return }
+        codexWatcherScopedHomeURL = homeURL
 
-        let dirPath = dirURL.path
-        let fd = open(dirPath, O_EVTONLY)
-        guard fd >= 0 else {
-            if scopeActive { homeURL.stopAccessingSecurityScopedResource() }
-            return
-        }
-        codexAuthWatcherDirFD = fd
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
-            eventMask: [.write, .rename],
-            queue: .main
-        )
-        source.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
-        }
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.codexAuthWatcherDirFD >= 0 {
-                close(self.codexAuthWatcherDirFD)
-                self.codexAuthWatcherDirFD = -1
+        let dotCodexDir = homeURL.appendingPathComponent(".codex")
+        if FileManager.default.fileExists(atPath: dotCodexDir.path) {
+            let fd = open(dotCodexDir.path, O_EVTONLY)
+            if fd >= 0 {
+                codexAuthWatcherDirFD = fd
+                let source = DispatchSource.makeFileSystemObjectSource(
+                    fileDescriptor: fd,
+                    eventMask: [.write, .rename],
+                    queue: .main
+                )
+                source.setEventHandler { [weak self] in
+                    Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
+                }
+                let captured = fd
+                source.setCancelHandler {
+                    if captured >= 0 { close(captured) }
+                }
+                source.resume()
+                codexAuthWatcherDirSource = source
             }
-            if scopeActive { homeURL.stopAccessingSecurityScopedResource() }
         }
-        source.resume()
-        codexAuthWatcherDirSource = source
+
+        let appSupportCodexDir = homeURL.appendingPathComponent("Library/Application Support/Codex")
+        if FileManager.default.fileExists(atPath: appSupportCodexDir.path) {
+            let fd = open(appSupportCodexDir.path, O_EVTONLY)
+            if fd >= 0 {
+                codexAuthWatcherAppSupportDirFD = fd
+                let source = DispatchSource.makeFileSystemObjectSource(
+                    fileDescriptor: fd,
+                    eventMask: [.write, .rename],
+                    queue: .main
+                )
+                source.setEventHandler { [weak self] in
+                    Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
+                }
+                let captured = fd
+                source.setCancelHandler {
+                    if captured >= 0 { close(captured) }
+                }
+                source.resume()
+                codexAuthWatcherAppSupportDirSource = source
+            }
+        }
+
+        if codexAuthWatcherDirSource == nil, codexAuthWatcherAppSupportDirSource == nil {
+            homeURL.stopAccessingSecurityScopedResource()
+            codexWatcherScopedHomeURL = nil
+        }
     }
 
     private func stopCodexAuthFileWatcher() {
         codexAuthWatcherDirSource?.cancel()
         codexAuthWatcherDirSource = nil
+        codexAuthWatcherAppSupportDirSource?.cancel()
+        codexAuthWatcherAppSupportDirSource = nil
+        codexAuthWatcherDirFD = -1
+        codexAuthWatcherAppSupportDirFD = -1
+        if let home = codexWatcherScopedHomeURL {
+            home.stopAccessingSecurityScopedResource()
+            codexWatcherScopedHomeURL = nil
+        }
     }
 
     /// ChatGPT accounts whose saved Codex snapshot matches that row’s OpenAI identity (OAuth),
@@ -1084,7 +1113,6 @@ final class AccountStore {
             }
             return nil
         } catch {
-            UserDefaults.standard.removeObject(forKey: Self.codexHomeDirBookmarkKey)
             return "Could not save Codex session: \(error.localizedDescription)\n\nMake sure Codex is logged in as this account, then try again."
         }
     }
@@ -1106,8 +1134,6 @@ final class AccountStore {
         let bundleIds = ["com.openai.chat", "com.openai.codex"]
         let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
         var codexStillRunning = !running.isEmpty
-
-        let primaryReadURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
 
         // ── Step 1: Verify Account B has a saved session before touching anything ──
         guard codexAuth.hasSavedSession(for: account.id) else {
@@ -1144,6 +1170,7 @@ final class AccountStore {
         // ── Step 3a: Codex has exited — safe to touch auth.json now ──
         if !codexStillRunning {
             let a = homeURL.startAccessingSecurityScopedResource()
+            let primaryReadURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
             // Refresh outgoing account's snapshot from auth.json BEFORE overwriting.
             // Codex may have refreshed its OAuth tokens during the session; capturing
             // those fresh tokens ensures the next switch-back doesn't fail.
@@ -1161,16 +1188,12 @@ final class AccountStore {
             return nil
         }
 
-        // ── Step 3b: Auto-quit failed.
-        //    Watcher runs every 2 s:
-        //      • While Codex is alive  → re-write Account B tokens (counters Codex refresh writes)
-        //      • Once Codex exits      → write Account B tokens one last time, then reopen ──
+        // ── Step 3b: Could not quit automatically — wait for user to quit, then write + reopen.
         startCodexReopenWatcher(for: account, homeURL: homeURL)
-        return "✓ Account switched. Codex won't close automatically — press ⌘Q in Codex and it will reopen as the new account."
+        return "Quit Codex or ChatGPT (⌘Q). When it exits, Usageview will reopen it with this account."
     }
 
-    /// Waits for Codex to exit (up to 5 minutes), then writes Account B's tokens and relaunches.
-    /// Does NOT re-write while Codex is running — that would invalidate OAuth refresh tokens.
+    /// Polls every 2s until Codex/ChatGPT have quit, then writes the target snapshot and reopens Codex.
     private func startCodexReopenWatcher(for account: Account, homeURL: URL) {
         let bundleIds = ["com.openai.chat", "com.openai.codex"]
         var attemptsLeft = 150   // up to 5 minutes
@@ -1390,14 +1413,12 @@ final class AccountStore {
     private func reopenCodexDesktopApp() {
         let workspace = NSWorkspace.shared
         let config = NSWorkspace.OpenConfiguration()
-
-        if let codexURL = workspace.urlForApplication(withBundleIdentifier: "com.openai.chat") {
-            workspace.openApplication(at: codexURL, configuration: config, completionHandler: nil)
-            return
-        }
-        if let codexURL = workspace.urlForApplication(withBundleIdentifier: "com.openai.codex") {
-            workspace.openApplication(at: codexURL, configuration: config, completionHandler: nil)
-            return
+        // Prefer standalone Codex when installed; ChatGPT bundle also hosts Codex on many setups.
+        for bundleId in ["com.openai.codex", "com.openai.chat"] {
+            if let appURL = workspace.urlForApplication(withBundleIdentifier: bundleId) {
+                workspace.openApplication(at: appURL, configuration: config, completionHandler: nil)
+                return
+            }
         }
         let fallbackURL = URL(fileURLWithPath: "/Applications/Codex.app")
         if FileManager.default.fileExists(atPath: fallbackURL.path) {
