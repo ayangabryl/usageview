@@ -155,6 +155,7 @@ final class AccountStore {
         }
         load()
         KeychainMigration.cleanupOrphanedTokens(keepingAccountIds: Set(accounts.map(\.id)))
+        startCodexSnapshotRefreshTimer()
     }
 
     // MARK: - Persistence
@@ -899,6 +900,55 @@ final class AccountStore {
             UserDefaults.standard.set(bookmarkData, forKey: key)
         }
         return url
+    }
+
+    /// Resolves the security-scoped home URL from the stored bookmark WITHOUT showing
+    /// any UI. Returns nil if the bookmark is missing or stale. Used for background tasks.
+    private func resolveHomeDirSilent() -> URL? {
+        guard let data = UserDefaults.standard.data(forKey: Self.codexHomeDirBookmarkKey) else { return nil }
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: data,
+                                 options: .withSecurityScope,
+                                 relativeTo: nil,
+                                 bookmarkDataIsStale: &isStale), !isStale
+        else { return nil }
+        return url
+    }
+
+    // MARK: - Background Codex snapshot refresh
+
+    private var codexSnapshotTimer: Timer?
+
+    /// Starts a repeating timer that keeps every saved Codex session snapshot up-to-date
+    /// while Codex is running. OAuth refresh token rotation means tokens change frequently;
+    /// this ensures we always restore the latest tokens on the next account switch.
+    func startCodexSnapshotRefreshTimer() {
+        codexSnapshotTimer?.invalidate()
+        let t = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        codexSnapshotTimer = t
+    }
+
+    /// Reads auth.json and refreshes any saved account snapshot whose account_id matches.
+    /// No-op if Codex is not running, the bookmark is unavailable, or the file is unreadable.
+    @MainActor
+    private func syncCodexSnapshotsFromDisk() {
+        let bundleIds = ["com.openai.chat", "com.openai.codex"]
+        guard !bundleIds.flatMap({ NSRunningApplication.runningApplications(withBundleIdentifier: $0) }).isEmpty
+        else { return }
+
+        guard let homeURL = resolveHomeDirSilent() else { return }
+        let fileURL = authFileURL(from: homeURL)
+        let accessing = homeURL.startAccessingSecurityScopedResource()
+
+        let candidates = accounts
+            .filter { $0.serviceType == .chatgpt && codexAuth.hasSavedSession(for: $0.id) }
+            .map(\.id)
+        codexAuth.refreshOutgoingSnapshots(for: candidates, authFileURL: fileURL)
+
+        if accessing { homeURL.stopAccessingSecurityScopedResource() }
     }
 
     /// Resolves auth.json URL from a home directory security-scoped URL.
