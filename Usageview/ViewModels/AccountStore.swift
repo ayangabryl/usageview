@@ -962,30 +962,17 @@ final class AccountStore {
         let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
         var codexStillRunning = !running.isEmpty
 
-        // ── Step 0: Refresh the outgoing account's snapshot from the CURRENT auth.json ──
-        // Codex refreshes OAuth tokens while running; if we don't capture those refreshed
-        // tokens now, the next switch-back to this account will fail with
-        // "refresh token already used".
         let fileURL = authFileURL(from: homeURL)
-        let accessingPre = homeURL.startAccessingSecurityScopedResource()
-        let allCandidates = accounts
-            .filter { $0.serviceType == .chatgpt && codexAuth.hasSavedSession(for: $0.id) && $0.id != account.id }
-            .map(\.id)
-        codexAuth.refreshOutgoingSnapshots(for: allCandidates, authFileURL: fileURL)
-        if accessingPre { homeURL.stopAccessingSecurityScopedResource() }
 
-        // ── Step 1: First write of Account B's tokens ──
-        let accessing = homeURL.startAccessingSecurityScopedResource()
-        do {
-            _ = try codexAuth.activateSession(for: account.id, writingTo: fileURL)
-        } catch {
-            if accessing { homeURL.stopAccessingSecurityScopedResource() }
-            UserDefaults.standard.removeObject(forKey: Self.codexHomeDirBookmarkKey)
-            return error.localizedDescription
+        // ── Step 1: Verify Account B has a saved session before touching anything ──
+        guard codexAuth.hasSavedSession(for: account.id) else {
+            return CodexAuthError.noSavedSession.localizedDescription
         }
-        if accessing { homeURL.stopAccessingSecurityScopedResource() }
 
         // ── Step 2: Attempt to quit Codex ──
+        // IMPORTANT: Do NOT write Account B's tokens while Codex is running.
+        // If Codex sees foreign tokens in auth.json, it tries to refresh them, and
+        // OpenAI will revoke those tokens as a suspicious cross-session refresh attempt.
         if codexStillRunning {
             for bundleId in bundleIds {
                 var err: NSDictionary?
@@ -1009,17 +996,23 @@ final class AccountStore {
             }
         }
 
-        // ── Step 3a: Codex quit — overwrite auth.json one final time (Codex may have written
-        //             Account A tokens during its shutdown sequence), then reopen ──
+        // ── Step 3a: Codex has exited — safe to touch auth.json now ──
         if !codexStillRunning {
-            let a2 = homeURL.startAccessingSecurityScopedResource()
-            // Capture any refreshed tokens Codex wrote during shutdown before overwriting.
-            let outgoing2 = accounts
+            let a = homeURL.startAccessingSecurityScopedResource()
+            // Refresh outgoing account's snapshot from auth.json BEFORE overwriting.
+            // Codex may have refreshed its OAuth tokens during the session; capturing
+            // those fresh tokens ensures the next switch-back doesn't fail.
+            let outgoing = accounts
                 .filter { $0.serviceType == .chatgpt && codexAuth.hasSavedSession(for: $0.id) && $0.id != account.id }
                 .map(\.id)
-            codexAuth.refreshOutgoingSnapshots(for: outgoing2, authFileURL: fileURL)
-            _ = try? codexAuth.activateSession(for: account.id, writingTo: fileURL)
-            if a2 { homeURL.stopAccessingSecurityScopedResource() }
+            codexAuth.refreshOutgoingSnapshots(for: outgoing, authFileURL: fileURL)
+            do {
+                _ = try codexAuth.activateSession(for: account.id, writingTo: fileURL)
+            } catch {
+                if a { homeURL.stopAccessingSecurityScopedResource() }
+                return error.localizedDescription
+            }
+            if a { homeURL.stopAccessingSecurityScopedResource() }
             reopenCodexDesktopApp()
             Task { await refreshAccount(account) }
             return nil
