@@ -903,42 +903,93 @@ final class AccountStore {
     }
 
     /// Resolves the security-scoped home URL from the stored bookmark WITHOUT showing
-    /// any UI. Returns nil if the bookmark is missing or stale. Used for background tasks.
+    /// any UI. Silently renews stale bookmarks. Returns nil only if the bookmark is missing.
     private func resolveHomeDirSilent() -> URL? {
         guard let data = UserDefaults.standard.data(forKey: Self.codexHomeDirBookmarkKey) else { return nil }
         var isStale = false
         guard let url = try? URL(resolvingBookmarkData: data,
                                  options: .withSecurityScope,
                                  relativeTo: nil,
-                                 bookmarkDataIsStale: &isStale), !isStale
-        else { return nil }
+                                 bookmarkDataIsStale: &isStale) else { return nil }
+        if isStale {
+            // Renew silently while we still have access.
+            if let renewed = try? url.bookmarkData(options: .withSecurityScope,
+                                                   includingResourceValuesForKeys: nil,
+                                                   relativeTo: nil) {
+                UserDefaults.standard.set(renewed, forKey: Self.codexHomeDirBookmarkKey)
+            }
+        }
         return url
     }
 
-    // MARK: - Background Codex snapshot refresh
+    // MARK: - Live Codex snapshot sync (timer + file watcher)
 
     private var codexSnapshotTimer: Timer?
+    private var codexAuthFileSource: DispatchSourceFileSystemObject?
+    private var codexAuthWatcherFD: Int32 = -1
+    private var codexAuthWatcherDirFD: Int32 = -1
+    private var codexAuthWatcherDirSource: DispatchSourceFileSystemObject?
 
-    /// Starts a repeating timer that keeps every saved Codex session snapshot up-to-date
-    /// while Codex is running. OAuth refresh token rotation means tokens change frequently;
-    /// this ensures we always restore the latest tokens on the next account switch.
+    /// Starts both a 3-second fallback timer AND a DispatchSource file watcher on
+    /// ~/.codex/ so every token refresh Codex makes is captured within milliseconds.
+    /// Keeps every saved Codex session snapshot up-to-date so the next switch always
+    /// uses fresh (non-revoked) tokens, regardless of OAuth rotation timing.
     func startCodexSnapshotRefreshTimer() {
         codexSnapshotTimer?.invalidate()
-        let t = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
         }
         RunLoop.main.add(t, forMode: .common)
         codexSnapshotTimer = t
+
+        startCodexAuthFileWatcher()
+    }
+
+    /// Watches ~/.codex/ directory for changes (handles atomic rename-based writes that
+    /// Codex uses when flushing token refreshes) and syncs snapshots immediately.
+    private func startCodexAuthFileWatcher() {
+        stopCodexAuthFileWatcher()
+        guard let homeURL = resolveHomeDirSilent() else { return }
+        let dirURL = homeURL.appendingPathComponent(".codex")
+        let scopeActive = homeURL.startAccessingSecurityScopedResource()
+
+        let dirPath = dirURL.path
+        let fd = open(dirPath, O_EVTONLY)
+        guard fd >= 0 else {
+            if scopeActive { homeURL.stopAccessingSecurityScopedResource() }
+            return
+        }
+        codexAuthWatcherDirFD = fd
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
+        }
+        source.setCancelHandler { [weak self] in
+            guard let self else { return }
+            if self.codexAuthWatcherDirFD >= 0 {
+                close(self.codexAuthWatcherDirFD)
+                self.codexAuthWatcherDirFD = -1
+            }
+            if scopeActive { homeURL.stopAccessingSecurityScopedResource() }
+        }
+        source.resume()
+        codexAuthWatcherDirSource = source
+    }
+
+    private func stopCodexAuthFileWatcher() {
+        codexAuthWatcherDirSource?.cancel()
+        codexAuthWatcherDirSource = nil
     }
 
     /// Reads auth.json and refreshes any saved account snapshot whose account_id matches.
-    /// No-op if Codex is not running, the bookmark is unavailable, or the file is unreadable.
+    /// Runs silently — no UI, no prompts. Called both by the timer and the file watcher.
     @MainActor
     private func syncCodexSnapshotsFromDisk() {
-        let bundleIds = ["com.openai.chat", "com.openai.codex"]
-        guard !bundleIds.flatMap({ NSRunningApplication.runningApplications(withBundleIdentifier: $0) }).isEmpty
-        else { return }
-
         guard let homeURL = resolveHomeDirSilent() else { return }
         let fileURL = authFileURL(from: homeURL)
         let accessing = homeURL.startAccessingSecurityScopedResource()
