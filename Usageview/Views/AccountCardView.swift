@@ -860,12 +860,12 @@ struct AccountMenuButton: View {
                     // Always allow re-saving so the user can update a stale snapshot.
                     if canCaptureCodexSession {
                         Button { onCaptureCodexSession() } label: {
-                            Label("Re-save Codex Session", systemImage: "arrow.counterclockwise.circle")
+                            Label("Refresh snapshot from Codex", systemImage: "arrow.counterclockwise.circle")
                         }
                     }
                 } else if canCaptureCodexSession {
                     Button { onCaptureCodexSession() } label: {
-                        Label("Save Codex Session for Switching", systemImage: "arrow.down.circle")
+                        Label("Grant access & link Codex on disk…", systemImage: "folder.badge.plus")
                     }
                 }
             }

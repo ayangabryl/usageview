@@ -151,6 +151,23 @@ final class CodexAuthService: Sendable {
         loadToken(key: authSnapshotKey(for: accountId)) != nil
     }
 
+    /// OpenAI ChatGPT `account_id` from a Codex `auth.json` on disk (caller must hold security scope).
+    func readChatGPTAccountIdFromAuthFile(at authFileURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: authFileURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let creds = try? parseCredentials(from: json),
+              let id = creds.accountId,
+              !id.isEmpty
+        else { return nil }
+        return id
+    }
+
+    /// `account_id` from the saved Codex snapshot only (no fallback to live `auth.json`).
+    func storedSnapshotChatgptAccountId(for accountId: UUID) -> String? {
+        guard let id = loadAccountId(key: accountIdKey(for: accountId)), !id.isEmpty else { return nil }
+        return id
+    }
+
     func isActiveSession(for accountId: UUID) -> Bool {
         guard let currentCreds = try? loadCLIAuth() else { return false }
 

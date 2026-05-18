@@ -1646,7 +1646,10 @@ struct MenuBarContentView: View {
             }
             return "Not enabled yet (import needed)"
         }
-        return "Enabled · save session to switch accounts"
+        if store.hasSavedCodexOAuthSession(for: account) {
+            return "Codex linked — switch from ⋯"
+        }
+        return "Auto-links when Codex on this Mac uses this account (needs folder access once)"
     }
 
     private func detailUsageSource(for account: Account) -> String {

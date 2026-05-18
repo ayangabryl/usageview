@@ -268,6 +268,9 @@ final class AccountStore {
             }
             save()
             flashMenuBarCheckmark()
+            if accounts[index].serviceType == .chatgpt, accounts[index].authMethod == .oauth {
+                Task { syncCodexSnapshotsFromDisk() }
+            }
         }
     }
 
@@ -546,6 +549,9 @@ final class AccountStore {
                     let storedAccount = accounts[index]
                     storeLogger.info("ChatGPT stored: fiveHour=\(storedAccount.fiveHourUsage ?? -1) sevenDay=\(storedAccount.sevenDayUsage ?? -1) isStatusOnly=\(storedAccount.isStatusOnly) hasDualWindows=\(storedAccount.hasDualWindows)")
                     save()
+                    if account.authMethod == .oauth {
+                        syncCodexSnapshotsFromDisk()
+                    }
                 } else {
                     storeLogger.error("ChatGPT store: account NOT FOUND in array!")
                 }
@@ -817,7 +823,19 @@ final class AccountStore {
 
     func isActiveCodexSession(for account: Account) -> Bool {
         if isCodexManaged(account) { return codexAuth.isActiveSession(for: account.id) }
-        if isCodexOAuth(account) { return codexAuth.isActiveSession(for: account.id) }
+        if isCodexOAuth(account) {
+            guard codexAuth.isActiveSession(for: account.id) else { return false }
+            // "Save session" while Codex is still another user copies that user's tokens into this
+            // row; both rows would match ~/.codex by OpenAI account_id. Only treat as active when
+            // this row's saved Codex snapshot matches this row's ChatGPT OAuth identity.
+            if let oauthAcc = openaiAuth.chatgptAccountId(for: account.id),
+               let snapAcc = codexAuth.chatgptAccountId(for: account.id),
+               !oauthAcc.isEmpty,
+               !snapAcc.isEmpty {
+                return oauthAcc == snapAcc
+            }
+            return true
+        }
         return false
     }
 
@@ -875,6 +893,7 @@ final class AccountStore {
                         UserDefaults.standard.set(renewed, forKey: key)
                     }
                 }
+                startCodexAuthFileWatcher()
                 return url
             }
             UserDefaults.standard.removeObject(forKey: key)
@@ -899,6 +918,7 @@ final class AccountStore {
                                                      relativeTo: nil) {
             UserDefaults.standard.set(bookmarkData, forKey: key)
         }
+        startCodexAuthFileWatcher()
         return url
     }
 
@@ -993,13 +1013,38 @@ final class AccountStore {
         guard let homeURL = resolveHomeDirSilent() else { return }
         let fileURL = authFileURL(from: homeURL)
         let accessing = homeURL.startAccessingSecurityScopedResource()
+        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
 
         let candidates = accounts
             .filter { $0.serviceType == .chatgpt && codexAuth.hasSavedSession(for: $0.id) }
             .map(\.id)
         codexAuth.refreshOutgoingSnapshots(for: candidates, authFileURL: fileURL)
 
-        if accessing { homeURL.stopAccessingSecurityScopedResource() }
+        autoBindOrHealOAuthCodexSnapshotsIfDiskMatchesCurrentUser(authFileURL: fileURL)
+    }
+
+    /// When `auth.json` on disk is the same OpenAI user as a ChatGPT OAuth row, copy it into
+    /// that row's snapshot automatically (or heal a mismatched snapshot). Requires home-folder
+    /// bookmark from any prior Codex switch / "link" action.
+    private func autoBindOrHealOAuthCodexSnapshotsIfDiskMatchesCurrentUser(authFileURL: URL) {
+        guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: authFileURL) else { return }
+
+        for account in accounts {
+            guard account.serviceType == .chatgpt, account.authMethod == .oauth else { continue }
+            guard isConnected(for: account) else { continue }
+            guard let oauthId = openaiAuth.chatgptAccountId(for: account.id), !oauthId.isEmpty else { continue }
+            guard oauthId == diskId else { continue }
+
+            let hasSnap = codexAuth.hasSavedSession(for: account.id)
+            let storedSnapId = codexAuth.storedSnapshotChatgptAccountId(for: account.id)
+            let needsHeal = hasSnap && (storedSnapId != oauthId)
+            guard !hasSnap || needsHeal else { continue }
+
+            guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { continue }
+            guard let info = try? codexAuth.connectFromCLI(for: account.id, authFileURL: authFileURL) else { continue }
+            if let name = info.name { accounts[index].username = name }
+            save()
+        }
     }
 
     /// Resolves auth.json URL from a home directory security-scoped URL.
@@ -1164,8 +1209,9 @@ final class AccountStore {
     }
 
     func isActiveSession(for account: Account) -> Bool {
-        if isCodexManaged(account) { return isActiveCodexSession(for: account) }
-        if isCodexOAuth(account) { return codexAuth.isActiveSession(for: account.id) }
+        if isCodexManaged(account) || isCodexOAuth(account) {
+            return isActiveCodexSession(for: account)
+        }
         return false
     }
 
