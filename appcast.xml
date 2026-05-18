@@ -6,14 +6,14 @@
     <description>Most recent changes with links to updates.</description>
     <language>en</language>
     <item>
-      <title>Version 1.4.5</title>
-      <pubDate>Mon, 18 May 2026 22:07:21 +0800</pubDate>
-      <sparkle:version>18</sparkle:version>
-      <sparkle:shortVersionString>1.4.5</sparkle:shortVersionString>
+      <title>Version 1.4.6</title>
+      <pubDate>Tue, 19 May 2026 00:32:55 +0800</pubDate>
+      <sparkle:version>19</sparkle:version>
+      <sparkle:shortVersionString>1.4.6</sparkle:shortVersionString>
       <enclosure
-        url="https://github.com/ayangabryl/Usageview/releases/download/v1.4.5/Usageview-1.4.5.dmg"
-        sparkle:edSignature="3zr2XCdYqz29HwJGZJiRkj0RJM0irPqyRYe85p1MoB1xCVRZEZtWXxvuAj70lH4OqXf8budpLGRr8orhxPpICQ=="
-        length="4326935"
+        url="https://github.com/ayangabryl/Usageview/releases/download/v1.4.6/Usageview-1.4.6.dmg"
+        sparkle:edSignature="2pfoMo97AVQvxnVQSMgF8wEDz9ir1+qAcxRhG11dpFK7SaV4acIy+altFxxTVlQ3vPuC4ML5PuPF7jpduvx9Cg=="
+        length="4337396"
         type="application/octet-stream" />
     </item>
   </channel>
