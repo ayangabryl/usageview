@@ -896,7 +896,8 @@ struct MenuBarContentView: View {
 
     private func openAICodexCLIConnectView(accountId: UUID) -> some View {
         CodexInlineConnectView(
-            authService: store.codexAuth,
+            codexAuth: store.codexAuth,
+            openAIAuth: store.openaiAuth,
             accountId: accountId,
             onDone: { info in
                 if let info {
@@ -2112,14 +2113,21 @@ struct OpenAIInlineConnectView: View {
     let accountId: UUID
     let onDone: (OpenAIAccountInfo?) -> Void
     var onSwitchToAPIKey: (() -> Void)? = nil
+    /// When embedded (e.g. Codex connect), the parent supplies navigation and back behavior.
+    var showsNavigationChrome: Bool = true
+    var showsBrandingIcon: Bool = true
     @State private var copied = false
     @State private var errorMessage: String?
 
     var body: some View {
         VStack(spacing: 16) {
-            navHeader
+            if showsNavigationChrome {
+                navHeader
+            }
 
-            ServiceIconView(serviceType: .chatgpt, avatarURL: nil, size: 48)
+            if showsBrandingIcon {
+                ServiceIconView(serviceType: .chatgpt, avatarURL: nil, size: 48)
+            }
 
             if let code = authService.userCode {
                 Text("Enter this code on OpenAI:")
@@ -3441,14 +3449,16 @@ struct JetBrainsInlineConnectView: View {
     }
 }
 
-// MARK: - Codex Inline Connect (CLI)
+// MARK: - Codex session (in-app OpenAI sign-in + optional file import)
 
 struct CodexInlineConnectView: View {
-    let authService: CodexAuthService
+    let codexAuth: CodexAuthService
+    let openAIAuth: OpenAIAuthService
     let accountId: UUID
     let onDone: (CodexAccountInfo?) -> Void
     @State private var isConnecting = false
-    @State private var errorMessage: String?
+    @State private var fileImportError: String?
+    @State private var bridgeError: String?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -3456,65 +3466,112 @@ struct CodexInlineConnectView: View {
 
             ServiceIconView(serviceType: .chatgpt, avatarURL: nil, size: 48)
 
-            Text("OpenAI · Codex CLI\nRun `codex login` in Terminal, then import your session for 5-hour and weekly Codex usage.\nRepeat for each account, then use account menu → Switch to This in Codex.")
+            Text("Sign in with your OpenAI account below. Your browser opens with a short code—the same sign-in Codex uses. Everything happens in Usageview; no Terminal. The Codex app is unchanged until you use Switch to This in Codex from the account menu.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
-            if let errorMessage {
-                Text(errorMessage)
+            OpenAIInlineConnectView(
+                authService: openAIAuth,
+                accountId: accountId,
+                onDone: { openAIResult in
+                    guard let openAIResult else { return }
+                    guard let bundle = openAIAuth.oauthTokensForCodexBridge(accountId: accountId) else {
+                        bridgeError = "Could not read sign-in. Please try again."
+                        return
+                    }
+                    do {
+                        let info = try codexAuth.saveCodexAuthSnapshotFromDeviceFlowOAuth(
+                            for: accountId,
+                            accessToken: bundle.access,
+                            refreshToken: bundle.refresh,
+                            idToken: bundle.idToken,
+                            chatgptAccountId: openAIResult.accountId
+                        )
+                        openAIAuth.disconnect(accountId: accountId)
+                        bridgeError = nil
+                        onDone(info)
+                    } catch {
+                        bridgeError = error.localizedDescription
+                        openAIAuth.disconnect(accountId: accountId)
+                    }
+                },
+                showsNavigationChrome: false,
+                showsBrandingIcon: false
+            )
+
+            if let bridgeError {
+                Text(bridgeError)
                     .font(.caption2)
                     .foregroundStyle(.red)
-                    .padding(.horizontal, 16)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
             }
 
-            Button {
-                isConnecting = true
-                errorMessage = nil
-                // NSOpenPanel grants sandbox access to ~/.codex/auth.json.
-                let panel = NSOpenPanel()
-                panel.message = "Select your Codex auth.json file to import the session."
-                panel.prompt = "Import"
-                panel.canChooseFiles = true
-                panel.canChooseDirectories = false
-                panel.allowsMultipleSelection = false
-                panel.showsHiddenFiles = true
-                panel.allowedContentTypes = [.json]
-                panel.nameFieldStringValue = "auth.json"
-                // Pre-navigate to ~/.codex/ using the real (non-sandboxed) home.
-                if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-                    let realHome = String(cString: dir)
-                    panel.directoryURL = URL(fileURLWithPath: "\(realHome)/.codex")
-                }
-                guard panel.runModal() == .OK, let fileURL = panel.url else {
-                    isConnecting = false
-                    return
-                }
-                let accessing = fileURL.startAccessingSecurityScopedResource()
-                defer { if accessing { fileURL.stopAccessingSecurityScopedResource() } }
-                do {
-                    let info = try authService.connectFromCLI(for: accountId, authFileURL: fileURL)
-                    onDone(info)
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-                isConnecting = false
-            } label: {
-                HStack(spacing: 6) {
-                    if isConnecting {
-                        ProgressView().controlSize(.small)
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("If you already have an auth.json on this Mac (for example from the Codex CLI), you can import it instead of signing in again.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let fileImportError {
+                        Text(fileImportError)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
                     }
-                    Text(isConnecting ? "Reading auth.json…" : "Import from Codex CLI")
-                        .font(.subheadline.weight(.medium))
+
+                    Button {
+                        isConnecting = true
+                        fileImportError = nil
+                        let panel = NSOpenPanel()
+                        panel.message = "Select the auth.json file for this Usageview account."
+                        panel.prompt = "Import"
+                        panel.canChooseFiles = true
+                        panel.canChooseDirectories = false
+                        panel.allowsMultipleSelection = false
+                        panel.showsHiddenFiles = true
+                        panel.allowedContentTypes = [.json]
+                        panel.nameFieldStringValue = "auth.json"
+                        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+                            let realHome = String(cString: dir)
+                            panel.directoryURL = URL(fileURLWithPath: "\(realHome)/.codex")
+                        }
+                        guard panel.runModal() == .OK, let fileURL = panel.url else {
+                            isConnecting = false
+                            return
+                        }
+                        let accessing = fileURL.startAccessingSecurityScopedResource()
+                        defer { if accessing { fileURL.stopAccessingSecurityScopedResource() } }
+                        do {
+                            let info = try codexAuth.connectFromCLI(for: accountId, authFileURL: fileURL)
+                            onDone(info)
+                        } catch {
+                            fileImportError = error.localizedDescription
+                        }
+                        isConnecting = false
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isConnecting {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(isConnecting ? "Reading…" : "Choose auth.json…")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(ServiceType.chatgpt.accentColor)
+                    .disabled(isConnecting)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .padding(.top, 4)
+            } label: {
+                Text("Import auth.json from disk instead")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ServiceType.chatgpt.accentColor)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(ServiceType.chatgpt.accentColor)
-            .disabled(isConnecting)
             .padding(.horizontal, 16)
 
             Link(destination: URL(string: "https://chatgpt.com/codex/settings/usage")!) {
@@ -3530,14 +3587,17 @@ struct CodexInlineConnectView: View {
 
     private var navHeader: some View {
         HStack(spacing: 8) {
-            Button { onDone(nil) } label: {
+            Button {
+                openAIAuth.cancelDeviceFlow()
+                onDone(nil)
+            } label: {
                 Image(systemName: "chevron.left")
                     .font(.body.weight(.medium))
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Text("OpenAI · Codex CLI")
+            Text("OpenAI · Codex session")
                 .font(.headline)
             Spacer()
         }

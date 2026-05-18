@@ -73,6 +73,49 @@ final class CodexAuthService: Sendable {
         return CodexAccountInfo(name: label)
     }
 
+    /// Builds a Codex Desktop–compatible `auth.json` snapshot from OpenAI OAuth tokens (same Codex device flow as ChatGPT).
+    func saveCodexAuthSnapshotFromDeviceFlowOAuth(
+        for accountId: UUID,
+        accessToken: String,
+        refreshToken: String,
+        idToken: String?,
+        chatgptAccountId: String?
+    ) throws -> CodexAccountInfo {
+        var tokens: [String: Any] = [
+            "access_token": accessToken,
+            "refresh_token": refreshToken,
+        ]
+        if let idTok = idToken, !idTok.isEmpty { tokens["id_token"] = idTok }
+        if let aid = chatgptAccountId, !aid.isEmpty { tokens["account_id"] = aid }
+
+        var root: [String: Any] = [
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": "",
+            "tokens": tokens,
+        ]
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        root["last_refresh"] = fmt.string(from: Date())
+
+        let writeData = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        guard let raw = String(data: writeData, encoding: .utf8) else {
+            throw CodexAuthError.invalidFormat
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: writeData) as? [String: Any] else {
+            throw CodexAuthError.invalidFormat
+        }
+        let creds = try parseCredentials(from: json)
+        saveToken(key: tokenKey(for: accountId), value: creds.accessToken)
+        if let accountIdString = creds.accountId {
+            saveToken(key: accountIdKey(for: accountId), value: accountIdString)
+        } else {
+            removeToken(key: accountIdKey(for: accountId))
+        }
+        saveToken(key: authSnapshotKey(for: accountId), value: raw)
+        let label = creds.accountId.map { "Codex · \($0.prefix(8))…" } ?? "Codex"
+        return CodexAccountInfo(name: label)
+    }
+
     func getValidToken(for accountId: UUID) async -> String? {
         if let stored = loadToken(key: tokenKey(for: accountId)) {
             return stored

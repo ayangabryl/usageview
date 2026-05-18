@@ -280,6 +280,11 @@ final class OpenAIAuthService: Sendable {
                 if let refreshToken {
                     saveToken(key: refreshKey(for: accountId), value: refreshToken)
                 }
+                if let idTok = tokenJSON["id_token"] as? String, !idTok.isEmpty {
+                    saveToken(key: idTokenKey(for: accountId), value: idTok)
+                } else {
+                    removeToken(key: idTokenKey(for: accountId))
+                }
                 UserDefaults.standard.set(
                     Date.now.timeIntervalSince1970 + expiresIn,
                     forKey: expiresKey(for: accountId)
@@ -332,6 +337,11 @@ final class OpenAIAuthService: Sendable {
                 let expiresIn = json["expires_in"] as? Double ?? 3600
                 saveToken(key: accessKey(for: accountId), value: accessToken)
                 saveToken(key: refreshKey(for: accountId), value: refreshToken)
+                if let idTok = json["id_token"] as? String, !idTok.isEmpty {
+                    saveToken(key: idTokenKey(for: accountId), value: idTok)
+                } else {
+                    removeToken(key: idTokenKey(for: accountId))
+                }
                 UserDefaults.standard.set(
                     Date.now.timeIntervalSince1970 + expiresIn,
                     forKey: expiresKey(for: accountId)
@@ -412,8 +422,18 @@ final class OpenAIAuthService: Sendable {
     func disconnect(accountId: UUID) {
         removeToken(key: accessKey(for: accountId))
         removeToken(key: refreshKey(for: accountId))
+        removeToken(key: idTokenKey(for: accountId))
         removeToken(key: apiKeyKey(for: accountId))
         UserDefaults.standard.removeObject(forKey: expiresKey(for: accountId))
+    }
+
+    /// Read OAuth material after a successful device flow (before `disconnect` clears it). Used to build a Codex `auth.json` snapshot.
+    func oauthTokensForCodexBridge(accountId: UUID) -> (access: String, refresh: String, idToken: String?)? {
+        guard let access = loadToken(key: accessKey(for: accountId)),
+              let refresh = loadToken(key: refreshKey(for: accountId))
+        else { return nil }
+        let idTok = loadToken(key: idTokenKey(for: accountId))
+        return (access, refresh, idTok)
     }
 
     // MARK: - JWT Identity Extraction
@@ -462,6 +482,10 @@ final class OpenAIAuthService: Sendable {
 
     private func apiKeyKey(for id: UUID) -> String {
         "com.ayangabryl.usage.openai-apikey-\(id.uuidString)"
+    }
+
+    private func idTokenKey(for id: UUID) -> String {
+        "com.ayangabryl.usage.openai-id-token-\(id.uuidString)"
     }
 
     // MARK: - Token Storage (Keychain)
