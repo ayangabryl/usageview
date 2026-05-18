@@ -356,8 +356,14 @@ struct MenuBarContentView: View {
 
     private func switchCodexSession(for account: Account) {
         if store.isCodexManaged(account) {
-            if let error = store.activateCodexSession(for: account, reopenApp: true) {
-                codexSwitchError = error
+            Task {
+                if let message = await store.activateCodexManagedSession(for: account) {
+                    if message.hasPrefix("✓") {
+                        codexSwitchNotice = message
+                    } else {
+                        codexSwitchError = message
+                    }
+                }
             }
         } else if store.isCodexOAuth(account) {
             Task {
@@ -379,15 +385,25 @@ struct MenuBarContentView: View {
         navigate(to: .connectOpenAICodexCLI(account.id))
     }
 
-    /// An OAuth account that is connected but has no session snapshot yet can be captured.
+    /// ChatGPT (OAuth or Codex-managed) and standalone Codex rows can save a Desktop session snapshot.
     private func canCaptureCodexSession(for account: Account) -> Bool {
-        store.isCodexOAuth(account) && store.isConnected(for: account)
+        guard store.isConnected(for: account) else { return false }
+        switch account.serviceType {
+        case .chatgpt:
+            return store.isCodexOAuth(account) || store.isCodexManaged(account)
+        case .codex:
+            return true
+        default:
+            return false
+        }
     }
 
     private func captureCodexSession(for account: Account) {
         Task {
-            if let error = await store.captureCodexOAuthSession(for: account) {
+            if let error = await store.captureCodexDesktopSession(for: account) {
                 codexSwitchError = error
+            } else {
+                codexSwitchNotice = "✓ Saved Codex Desktop session for this account. Use “Switch to This in Codex” to move between accounts; repeat “Save Codex Desktop session” on each account after you sign in there."
             }
         }
     }
@@ -1637,19 +1653,21 @@ struct MenuBarContentView: View {
 
     private func codexQuickSwitchStatus(for account: Account) -> String {
         guard account.serviceType == .chatgpt else { return "Not applicable" }
+        let desktop = store.hasCodexDesktopSnapshot(for: account)
+        let desktopBit = desktop ? " · Full Desktop snapshot saved" : " · Save Desktop session in ⋯ (once per account)"
         if account.authMethod == .codexCLI {
             if store.isActiveCodexSession(for: account) {
-                return "Enabled · Current in Codex"
+                return "Enabled · Current in Codex\(desktopBit)"
             }
             if store.hasSavedCodexSession(for: account) {
-                return "Enabled"
+                return "Enabled\(desktopBit)"
             }
             return "Not enabled yet (import needed)"
         }
         if store.hasSavedCodexOAuthSession(for: account) {
-            return "Codex linked — switch from ⋯"
+            return "Codex linked — switch from ⋯\(desktopBit)"
         }
-        return "Auto-links when Codex on this Mac uses this account (needs folder access once)"
+        return "Auto-links when Codex on this Mac uses this account (needs folder access once)\(desktopBit)"
     }
 
     private func detailUsageSource(for account: Account) -> String {
@@ -3472,6 +3490,12 @@ struct CodexInlineConnectView: View {
             Text("Sign in with your OpenAI account below. Your browser opens with a short code—the same sign-in Codex uses. Everything happens in Usageview; no Terminal. The Codex app is unchanged until you use Switch to This in Codex from the account menu.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+
+            Text("For Codex Desktop: after you open Codex signed in as this user once, quit Codex (⌘Q), then use the account ⋯ menu → Save Codex Desktop session so switching restores the full app, not only auth.json.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 

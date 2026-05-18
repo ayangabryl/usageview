@@ -182,6 +182,14 @@ final class CodexOAuthSessionService: Sendable {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    /// Restores Local Storage / cookies / partitions when Usageview already has a per-account snapshot.
+    /// `codexSupportScopedURL` must be the real `~/Library/Application Support/Codex` directory under an
+    /// active security-scoped bookmark (typically the user’s home folder grant).
+    func restoreSnapshotIfPresent(for accountId: UUID, codexSupportScopedURL: URL) throws {
+        guard hasSnapshot(for: accountId) else { return }
+        try restoreSnapshot(for: accountId, to: codexSupportScopedURL)
+    }
+
     // MARK: - Private Helpers
 
     private func restoreSnapshot(for accountId: UUID, to grantedURL: URL) throws {
@@ -227,7 +235,7 @@ final class CodexOAuthSessionService: Sendable {
     private func reopenCodex() {
         let workspace = NSWorkspace.shared
         let config = NSWorkspace.OpenConfiguration()
-        let bundleIds = ["com.openai.chat", "com.openai.codex"]
+        let bundleIds = ["com.openai.codex", "com.openai.chat"]
         for bundleId in bundleIds {
             if let url = workspace.urlForApplication(withBundleIdentifier: bundleId) {
                 workspace.openApplication(at: url, configuration: config, completionHandler: nil)
