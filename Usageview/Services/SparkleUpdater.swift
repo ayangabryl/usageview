@@ -12,7 +12,8 @@ final class SparkleUpdater: NSObject {
     private let controller: SPUStandardUpdaterController
     private var observation: NSKeyValueObservation?
 
-    var canCheckForUpdates: Bool = false
+    /// Always enabled in the DMG build — Sparkle itself gates whether a check can run.
+    var canCheckForUpdates: Bool = true
     var automaticallyChecksForUpdates: Bool {
         get { controller.updater.automaticallyChecksForUpdates }
         set { controller.updater.automaticallyChecksForUpdates = newValue }
@@ -25,10 +26,12 @@ final class SparkleUpdater: NSObject {
             userDriverDelegate: nil
         )
         super.init()
-        // KVO-observe canCheckForUpdates — Sparkle flips it to true after startup
+        // Keep canCheckForUpdates in sync via KVO.
+        // Use Task { @MainActor in } to avoid @Observable / DispatchQueue conflicts.
         observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
-            DispatchQueue.main.async {
-                self?.canCheckForUpdates = updater.canCheckForUpdates
+            let value = updater.canCheckForUpdates
+            Task { @MainActor [weak self] in
+                self?.canCheckForUpdates = value
             }
         }
     }
