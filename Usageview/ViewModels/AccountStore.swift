@@ -273,7 +273,10 @@ final class AccountStore {
             save()
             flashMenuBarCheckmark()
             if accounts[index].serviceType == .chatgpt, accounts[index].authMethod == .oauth {
-                Task { syncCodexSnapshotsFromDisk() }
+                Task {
+                    _ = await openaiAuth.discoverChatgptAccountId(for: id)
+                    syncCodexSnapshotsFromDisk()
+                }
             }
         }
     }
@@ -832,7 +835,7 @@ final class AccountStore {
             // Require explicit proof this Usageview row is the same OpenAI user as the snapshot
             // and disk (isActiveSession). Never default to "active" when ids are missing — that
             // disabled "Switch" on every row and showed duplicate green dots.
-            guard let oauthAcc = openaiAuth.chatgptAccountId(for: account.id), !oauthAcc.isEmpty,
+            guard let oauthAcc = openaiAuth.resolvedChatgptAccountId(for: account.id), !oauthAcc.isEmpty,
                   let snapAcc = codexAuth.snapshotChatgptAccountId(for: account.id), !snapAcc.isEmpty
             else { return false }
             return oauthAcc == snapAcc
@@ -1027,9 +1030,9 @@ final class AccountStore {
             if let excludedId, account.id == excludedId { return nil }
             guard account.serviceType == .chatgpt, codexAuth.hasSavedSession(for: account.id) else { return nil }
             if isCodexOAuth(account) {
-                guard let oauth = openaiAuth.chatgptAccountId(for: account.id), !oauth.isEmpty,
-                      let snap = codexAuth.snapshotChatgptAccountId(for: account.id), !snap.isEmpty,
-                      oauth == snap else { return nil }
+            guard let oauth = openaiAuth.resolvedChatgptAccountId(for: account.id), !oauth.isEmpty,
+                  let snap = codexAuth.snapshotChatgptAccountId(for: account.id), !snap.isEmpty,
+                  oauth == snap else { return nil }
             }
             return account.id
         }
@@ -1059,7 +1062,7 @@ final class AccountStore {
         for account in accounts {
             guard account.serviceType == .chatgpt, account.authMethod == .oauth else { continue }
             guard isConnected(for: account) else { continue }
-            guard let oauthId = openaiAuth.chatgptAccountId(for: account.id), !oauthId.isEmpty else { continue }
+            guard let oauthId = openaiAuth.resolvedChatgptAccountId(for: account.id), !oauthId.isEmpty else { continue }
             guard oauthId == diskId else { continue }
 
             let hasSnap = codexAuth.hasSavedSession(for: account.id)
@@ -1109,14 +1112,31 @@ final class AccountStore {
         return cleared
     }
 
+    /// Resolves OpenAI `account_id` for Codex Desktop (keychain, JWT, `/me`, optional Codex `auth.json` on disk).
+    private func resolvedOpenAIChatgptAccountId(for account: Account, diskAuthFileURL: URL?) async -> String? {
+        if let id = openaiAuth.resolvedChatgptAccountId(for: account.id), !id.isEmpty { return id }
+        if let discovered = await openaiAuth.discoverChatgptAccountId(for: account.id), !discovered.isEmpty {
+            return discovered
+        }
+        if let fileURL = diskAuthFileURL,
+           let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL), !diskId.isEmpty,
+           openaiAuth.isAuthenticated(for: account.id) {
+            openaiAuth.persistChatgptAccountId(diskId, for: account.id)
+            return diskId
+        }
+        return nil
+    }
+
     /// OpenAI `account_id` this row should use for Desktop snapshot capture/restore, when identities are aligned.
     private func expectedChatgptAccountIdForCodexDesktop(for account: Account) -> String? {
         if isCodexOAuth(account) {
-            guard let oauth = openaiAuth.chatgptAccountId(for: account.id), !oauth.isEmpty,
-                  let snap = codexAuth.snapshotChatgptAccountId(for: account.id), !snap.isEmpty,
-                  oauth == snap
-            else { return nil }
-            return oauth
+            let oauth = openaiAuth.resolvedChatgptAccountId(for: account.id)
+            let snap = codexAuth.snapshotChatgptAccountId(for: account.id)
+            if let oauth, !oauth.isEmpty {
+                if let snap, !snap.isEmpty, snap != oauth { return oauth }
+                return oauth
+            }
+            return snap
         }
         if isCodexManaged(account) || account.serviceType == .codex {
             return codexAuth.snapshotChatgptAccountId(for: account.id)
@@ -1155,8 +1175,12 @@ final class AccountStore {
         let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
 
         if isCodexOAuth(account) {
-            guard let oauthId = openaiAuth.chatgptAccountId(for: account.id), !oauthId.isEmpty else {
-                return "This Usageview account is missing OpenAI identity. Disconnect and sign in again, then retry."
+            guard let oauthId = await resolvedOpenAIChatgptAccountId(for: account, diskAuthFileURL: fileURL) else {
+                return """
+                This Usageview account is not fully linked to OpenAI yet.
+
+                Open the account menu → Connect (or Disconnect and sign in again). Wait until sign-in finishes—not only the code screen—then quit Codex (⌘Q) and Save Codex Desktop session.
+                """
             }
             guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL), !diskId.isEmpty else {
                 return "Could not read which account Codex Desktop is using. Quit Codex (⌘Q), open Codex signed in as this user, quit again, then Save."

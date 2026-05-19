@@ -294,8 +294,13 @@ final class OpenAIAuthService: Sendable {
                     forKey: expiresKey(for: accountId)
                 )
                 let idToken = tokenJSON["id_token"] as? String
+                persistAccountIdFromTokens(idToken: idToken, accessToken: accessToken, for: accountId)
                 if let identity = extractIdentity(from: idToken ?? accessToken) {
+                    persistAccountIdFromIdentity(identity, for: accountId)
                     return identity
+                }
+                if let discovered = await discoverChatgptAccountId(for: accountId) {
+                    return OpenAIAccountInfo(email: nil, name: "OpenAI account", accountId: discovered)
                 }
                 logger.warning("OpenAI device flow: direct token response could not be decoded; using placeholder identity")
                 return OpenAIAccountInfo(email: nil, name: "OpenAI account", accountId: nil)
@@ -370,8 +375,13 @@ final class OpenAIAuthService: Sendable {
                 logger.info("OpenAI token exchange successful")
                 // Extract identity from JWT id_token or access_token
                 let idToken = json["id_token"] as? String
+                persistAccountIdFromTokens(idToken: idToken, accessToken: accessToken, for: accountId)
                 if let identity = extractIdentity(from: idToken ?? accessToken) {
+                    persistAccountIdFromIdentity(identity, for: accountId)
                     return identity
+                }
+                if let discovered = await discoverChatgptAccountId(for: accountId) {
+                    return OpenAIAccountInfo(email: nil, name: "OpenAI account", accountId: discovered)
                 }
                 // Tokens are saved; still complete sign-in so Usageview does not loop on the connect screen.
                 logger.warning("OpenAI token exchange: could not decode profile JWT; continuing with placeholder identity")
@@ -439,11 +449,60 @@ final class OpenAIAuthService: Sendable {
         return nil
     }
 
-    /// Get the ChatGPT account ID (for API requests header)
+    /// Get the ChatGPT account ID (for API requests header and Codex Desktop matching).
     func chatgptAccountId(for accountId: UUID) -> String? {
-        guard let token = loadToken(key: accessKey(for: accountId)) else { return nil }
-        let info = extractIdentity(from: token)
-        return info?.accountId
+        resolvedChatgptAccountId(for: accountId)
+    }
+
+    /// Best-effort OpenAI `account_id` for this Usageview row (keychain, JWTs, then `/me`).
+    func resolvedChatgptAccountId(for accountId: UUID) -> String? {
+        if let stored = loadToken(key: chatgptAccountIdKey(for: accountId)), !stored.isEmpty {
+            return stored
+        }
+        if let idTok = loadToken(key: idTokenKey(for: accountId)),
+           let info = extractIdentity(from: idTok),
+           let id = info.accountId, !id.isEmpty {
+            persistChatgptAccountId(id, for: accountId)
+            return id
+        }
+        if let access = loadToken(key: accessKey(for: accountId)),
+           let info = extractIdentity(from: access),
+           let id = info.accountId, !id.isEmpty {
+            persistChatgptAccountId(id, for: accountId)
+            return id
+        }
+        return nil
+    }
+
+    func persistChatgptAccountId(_ id: String, for accountId: UUID) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        saveToken(key: chatgptAccountIdKey(for: accountId), value: trimmed)
+    }
+
+    /// Fetches ChatGPT account id from `/backend-api/me` when JWTs omit it (common after device flow).
+    func discoverChatgptAccountId(for accountId: UUID) async -> String? {
+        if let existing = resolvedChatgptAccountId(for: accountId) { return existing }
+        guard let bearer = await getValidToken(for: accountId) else { return nil }
+
+        let url = URL(string: "https://chatgpt.com/backend-api/me")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 20
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        if let id = parseChatgptAccountId(from: json) {
+            persistChatgptAccountId(id, for: accountId)
+            logger.info("OpenAI: discovered chatgpt_account_id from /me")
+            return id
+        }
+        return nil
     }
 
     func disconnect(accountId: UUID) {
@@ -451,6 +510,7 @@ final class OpenAIAuthService: Sendable {
         removeToken(key: refreshKey(for: accountId))
         removeToken(key: idTokenKey(for: accountId))
         removeToken(key: apiKeyKey(for: accountId))
+        removeToken(key: chatgptAccountIdKey(for: accountId))
         UserDefaults.standard.removeObject(forKey: expiresKey(for: accountId))
     }
 
@@ -487,10 +547,49 @@ final class OpenAIAuthService: Sendable {
 
         let email = json["email"] as? String
         let name = json["name"] as? String
-        let accountId = json["chatgpt_account_id"] as? String
-            ?? json["https://api.openai.com/auth.chatgpt_account_id"] as? String
+        let accountId = parseChatgptAccountId(from: json)
 
         return OpenAIAccountInfo(email: email, name: name, accountId: accountId)
+    }
+
+    private func parseChatgptAccountId(from json: [String: Any]) -> String? {
+        let directKeys = [
+            "chatgpt_account_id",
+            "https://api.openai.com/auth.chatgpt_account_id",
+            "account_id",
+            "default_account_id",
+        ]
+        for key in directKeys {
+            if let value = json[key] as? String, !value.isEmpty { return value }
+        }
+        if let auth = json["https://api.openai.com/auth"] as? [String: Any],
+           let value = auth["chatgpt_account_id"] as? String, !value.isEmpty {
+            return value
+        }
+        if let accounts = json["accounts"] as? [[String: Any]] {
+            for entry in accounts {
+                if let value = entry["account_id"] as? String ?? entry["id"] as? String, !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    private func persistAccountIdFromIdentity(_ identity: OpenAIAccountInfo?, for accountId: UUID) {
+        if let id = identity?.accountId, !id.isEmpty {
+            persistChatgptAccountId(id, for: accountId)
+        }
+    }
+
+    private func persistAccountIdFromTokens(idToken: String?, accessToken: String, for accountId: UUID) {
+        if let idTok = idToken, let info = extractIdentity(from: idTok), let id = info.accountId, !id.isEmpty {
+            persistChatgptAccountId(id, for: accountId)
+            return
+        }
+        if let info = extractIdentity(from: accessToken), let id = info.accountId, !id.isEmpty {
+            persistChatgptAccountId(id, for: accountId)
+        }
     }
 
     // MARK: - Key Helpers
@@ -513,6 +612,10 @@ final class OpenAIAuthService: Sendable {
 
     private func idTokenKey(for id: UUID) -> String {
         "com.ayangabryl.usage.openai-id-token-\(id.uuidString)"
+    }
+
+    private func chatgptAccountIdKey(for id: UUID) -> String {
+        "com.ayangabryl.usage.openai-chatgpt-account-id-\(id.uuidString)"
     }
 
     // MARK: - Token Storage (Keychain)

@@ -645,6 +645,9 @@ struct MenuBarContentView: View {
             accountId: accountId,
             onDone: { info in
                 if let info {
+                    if let accId = info.accountId {
+                        store.openaiAuth.persistChatgptAccountId(accId, for: accountId)
+                    }
                     let displayName = info.name ?? info.email ?? nil
                     store.updateAccountAfterConnect(
                         id: accountId,
@@ -653,6 +656,7 @@ struct MenuBarContentView: View {
                         authMethod: .oauth
                     )
                     Task {
+                        _ = await store.openaiAuth.discoverChatgptAccountId(for: accountId)
                         if let account = store.accounts.first(where: { $0.id == accountId }) {
                             await store.refreshAccount(account)
                         }
