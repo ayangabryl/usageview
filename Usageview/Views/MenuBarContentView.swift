@@ -2141,7 +2141,11 @@ struct OpenAIInlineConnectView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(spacing: 16) {
+        // Subscribe to completion flags so `onChange(of: flowFinished)` reliably runs after OTP.
+        let _ = authService.flowFinished
+        let _ = authService.finishedFlowAccountId
+
+        return VStack(spacing: 16) {
             if showsNavigationChrome {
                 navHeader
             }

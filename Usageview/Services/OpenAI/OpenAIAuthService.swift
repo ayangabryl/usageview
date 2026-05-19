@@ -99,13 +99,15 @@ final class OpenAIAuthService: Sendable {
         finishedFlowAccountId = nil
         pendingResult = nil
         lastFlowError = nil
-        flowTask = Task {
+        // Must run on MainActor so @Observable publishes and SwiftUI `onChange(of: flowFinished)` fires.
+        flowTask = Task { @MainActor in
             let info = await startDeviceFlow(for: accountId)
             if Task.isCancelled { return }
-            // Store result for the view to pick up
+            // Publish completion before clearing the code so the UI never flashes back to the idle screen.
             self.pendingResult = info
             self.finishedFlowAccountId = accountId
             self.flowFinished = true
+            self.userCode = nil
             self.activeFlowAccountId = nil
             self.flowTask = nil
         }
@@ -136,10 +138,9 @@ final class OpenAIAuthService: Sendable {
     /// Start OpenAI device code flow
     private func startDeviceFlow(for accountId: UUID) async -> OpenAIAccountInfo? {
         isLoading = true
-        defer {
-            isLoading = false
-            userCode = nil
-        }
+        // Do not clear `userCode` here — `beginDeviceFlow` clears it after setting `flowFinished`
+        // so the connect view does not briefly show the initial “Sign in” state before `onDone` runs.
+        defer { isLoading = false }
 
         // Step 1: Request device + user codes (retry on Cloudflare 429)
         let codeURL = URL(string: "\(issuer)/api/accounts/deviceauth/usercode")!
@@ -268,6 +269,9 @@ final class OpenAIAuthService: Sendable {
                     codeVerifier: codeVerifier,
                     accountId: accountId
                 )
+                if info == nil && lastFlowError == nil {
+                    lastFlowError = "Could not finish sign-in after the code was accepted. Try again."
+                }
                 return info
             }
 
@@ -290,12 +294,24 @@ final class OpenAIAuthService: Sendable {
                     forKey: expiresKey(for: accountId)
                 )
                 let idToken = tokenJSON["id_token"] as? String
-                return extractIdentity(from: idToken ?? accessToken)
+                if let identity = extractIdentity(from: idToken ?? accessToken) {
+                    return identity
+                }
+                logger.warning("OpenAI device flow: direct token response could not be decoded; using placeholder identity")
+                return OpenAIAccountInfo(email: nil, name: "OpenAI account", accountId: nil)
             }
 
             if let error = tokenJSON["error"] as? String {
                 if error == "authorization_pending" || error == "slow_down" { continue }
                 logger.error("OpenAI device flow poll error: \(error, privacy: .public)")
+                lastFlowError = "OpenAI returned “\(error)”. Try signing in again."
+                return nil
+            }
+
+            // Avoid infinite polling on unexpected 2xx bodies (API drift).
+            if pollStatus == 200 {
+                logger.error("OpenAI device flow: unexpected 200 JSON (no tokens): \(pollResponseBody.prefix(500), privacy: .public)")
+                lastFlowError = "Unexpected response from OpenAI after you confirmed the code. Please try again."
                 return nil
             }
         }
@@ -322,11 +338,15 @@ final class OpenAIAuthService: Sendable {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return nil }
+            guard let http = response as? HTTPURLResponse else {
+                lastFlowError = "Invalid response from OpenAI."
+                return nil
+            }
 
             guard http.statusCode == 200 else {
                 let body = String(data: data, encoding: .utf8) ?? ""
                 logger.error("OpenAI token exchange failed (HTTP \(http.statusCode)): \(body.prefix(200), privacy: .public)")
+                lastFlowError = "Token exchange failed (HTTP \(http.statusCode)). Try again or use an API key."
                 return nil
             }
 
@@ -350,13 +370,20 @@ final class OpenAIAuthService: Sendable {
                 logger.info("OpenAI token exchange successful")
                 // Extract identity from JWT id_token or access_token
                 let idToken = json["id_token"] as? String
-                return extractIdentity(from: idToken ?? accessToken)
+                if let identity = extractIdentity(from: idToken ?? accessToken) {
+                    return identity
+                }
+                // Tokens are saved; still complete sign-in so Usageview does not loop on the connect screen.
+                logger.warning("OpenAI token exchange: could not decode profile JWT; continuing with placeholder identity")
+                return OpenAIAccountInfo(email: nil, name: "OpenAI account", accountId: nil)
             }
 
             let body = String(data: data, encoding: .utf8) ?? ""
             logger.error("OpenAI token exchange: missing access/refresh tokens. Keys: \(body.prefix(200), privacy: .public)")
+            lastFlowError = "OpenAI did not return tokens. Try again or use an API key."
         } catch {
             logger.error("OpenAI token exchange error: \(error.localizedDescription, privacy: .public)")
+            lastFlowError = error.localizedDescription
         }
         return nil
     }
