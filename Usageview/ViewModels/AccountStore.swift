@@ -1112,19 +1112,32 @@ final class AccountStore {
         return cleared
     }
 
-    /// Resolves OpenAI `account_id` for Codex Desktop (keychain, JWT, `/me`, optional Codex `auth.json` on disk).
-    private func resolvedOpenAIChatgptAccountId(for account: Account, diskAuthFileURL: URL?) async -> String? {
+    /// OpenAI `account_id` stored for this Usageview row (keychain + JWT + `/me` only — never Codex on disk).
+    private func usageviewOpenAIAccountId(for account: Account) async -> String? {
+        _ = await openaiAuth.discoverChatgptAccountId(for: account.id)
         if let id = openaiAuth.resolvedChatgptAccountId(for: account.id), !id.isEmpty { return id }
-        if let discovered = await openaiAuth.discoverChatgptAccountId(for: account.id), !discovered.isEmpty {
-            return discovered
-        }
-        if let fileURL = diskAuthFileURL,
-           let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL), !diskId.isEmpty,
-           openaiAuth.isAuthenticated(for: account.id) {
-            openaiAuth.persistChatgptAccountId(diskId, for: account.id)
-            return diskId
-        }
         return nil
+    }
+
+    private func accountDisplayName(_ account: Account) -> String {
+        if !account.label.isEmpty { return account.label }
+        if let username = account.username, !username.isEmpty { return username }
+        return account.serviceType.displayName
+    }
+
+    private func accountRowMatchingOpenAIId(_ openAIAccountId: String, excluding excludedId: UUID) -> Account? {
+        accounts.first { account in
+            if account.id == excludedId { return false }
+            guard account.serviceType == .chatgpt, isConnected(for: account) else { return false }
+            guard let oauth = openaiAuth.resolvedChatgptAccountId(for: account.id), oauth == openAIAccountId else {
+                return false
+            }
+            return true
+        }
+    }
+
+    private static func shortOpenAIAccountId(_ id: String) -> String {
+        id.count > 12 ? String(id.prefix(8)) + "…" : id
     }
 
     /// OpenAI `account_id` this row should use for Desktop snapshot capture/restore, when identities are aligned.
@@ -1150,7 +1163,7 @@ final class AccountStore {
     /// Flow: grant home-folder access once if needed → sync `auth.json` from disk for OAuth rows →
     /// copy `~/Library/Application Support/Codex/` session files into Usageview’s container.
     /// Best results: **quit Codex (⌘Q)** first so files are not locked.
-    func captureCodexDesktopSession(for account: Account) async -> String? {
+    func captureCodexDesktopSession(for account: Account, adoptCodexUserOnDisk: Bool = false) async -> String? {
         switch account.serviceType {
         case .chatgpt, .codex:
             break
@@ -1175,7 +1188,7 @@ final class AccountStore {
         let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
 
         if isCodexOAuth(account) {
-            guard let oauthId = await resolvedOpenAIChatgptAccountId(for: account, diskAuthFileURL: fileURL) else {
+            guard var oauthId = await usageviewOpenAIAccountId(for: account) else {
                 return """
                 This Usageview account is not fully linked to OpenAI yet.
 
@@ -1185,8 +1198,26 @@ final class AccountStore {
             guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL), !diskId.isEmpty else {
                 return "Could not read which account Codex Desktop is using. Quit Codex (⌘Q), open Codex signed in as this user, quit again, then Save."
             }
-            guard diskId == oauthId else {
-                return "Codex Desktop is signed in as a different OpenAI account than this Usageview row.\n\nQuit Codex (⌘Q), sign in here as the user for “\(account.username ?? account.label)”, quit Codex again, then Save Codex Desktop session."
+            if diskId != oauthId {
+                if adoptCodexUserOnDisk {
+                    openaiAuth.persistChatgptAccountId(diskId, for: account.id)
+                    oauthId = diskId
+                } else {
+                    let usageName = accountDisplayName(account)
+                    let other = accountRowMatchingOpenAIId(diskId, excluding: account.id)
+                    var msg = """
+                    Codex Desktop and this Usageview row don’t match.
+
+                    • Usageview “\(usageName)”: \(Self.shortOpenAIAccountId(oauthId))
+                    • Codex on disk right now: \(Self.shortOpenAIAccountId(diskId))
+                    """
+                    if let other {
+                        msg += "\n\nCodex is signed in as your other row “\(accountDisplayName(other))”. Either save on that row, or sign into “\(usageName)” inside Codex (⌘Q between steps)."
+                    } else {
+                        msg += "\n\nSign into “\(usageName)” inside Codex, quit Codex (⌘Q), then Save—or use ⋯ → Link to Codex user on disk if this row should track whoever Codex has now."
+                    }
+                    return msg
+                }
             }
             do {
                 let info = try codexAuth.connectFromCLI(for: account.id, authFileURL: fileURL)

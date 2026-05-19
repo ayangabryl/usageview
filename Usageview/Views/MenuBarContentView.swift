@@ -266,6 +266,7 @@ struct MenuBarContentView: View {
                 onPin: { store.togglePinToMenuBar(account) },
                 onSwitchCodexSession: { switchCodexSession(for: account) },
                 onCaptureCodexSession: { captureCodexSession(for: account) },
+                onLinkCodexDesktopSession: { linkCodexDesktopSession(for: account) },
                 onClearCodexDesktopSession: { clearCodexDesktopSession(for: account) },
                 onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
@@ -274,6 +275,7 @@ struct MenuBarContentView: View {
                 isActiveCodexSession: store.isActiveCodexSession(for: account),
                 canSwitchCodexSession: store.canSwitchCodexSession(for: account),
                 canCaptureCodexSession: canCaptureCodexSession(for: account),
+                canLinkCodexDesktopSession: canCaptureCodexSession(for: account),
                 canClearCodexDesktopSession: store.hasCodexDesktopSnapshot(for: account),
                 canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
@@ -318,6 +320,7 @@ struct MenuBarContentView: View {
                 onPin: { store.togglePinToMenuBar(account) },
                 onSwitchCodexSession: { switchCodexSession(for: account) },
                 onCaptureCodexSession: { captureCodexSession(for: account) },
+                onLinkCodexDesktopSession: { linkCodexDesktopSession(for: account) },
                 onClearCodexDesktopSession: { clearCodexDesktopSession(for: account) },
                 onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
@@ -326,6 +329,7 @@ struct MenuBarContentView: View {
                 isActiveCodexSession: store.isActiveCodexSession(for: account),
                 canSwitchCodexSession: store.canSwitchCodexSession(for: account),
                 canCaptureCodexSession: canCaptureCodexSession(for: account),
+                canLinkCodexDesktopSession: canCaptureCodexSession(for: account),
                 canClearCodexDesktopSession: store.hasCodexDesktopSnapshot(for: account),
                 canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
@@ -408,6 +412,16 @@ struct MenuBarContentView: View {
                 codexSwitchError = error
             } else {
                 codexSwitchNotice = "✓ Saved Codex Desktop session for this account. Use “Switch to This in Codex” to move between accounts; repeat “Save Codex Desktop session” on each account after you sign in there."
+            }
+        }
+    }
+
+    private func linkCodexDesktopSession(for account: Account) {
+        Task {
+            if let error = await store.captureCodexDesktopSession(for: account, adoptCodexUserOnDisk: true) {
+                codexSwitchError = error
+            } else {
+                codexSwitchNotice = "✓ Linked this Usageview row to the OpenAI user currently in Codex Desktop. You can switch with “Switch to This in Codex”."
             }
         }
     }

@@ -15,6 +15,7 @@ struct AccountCardView: View {
     var onPin: () -> Void = {}
     var onSwitchCodexSession: () -> Void = {}
     var onCaptureCodexSession: () -> Void = {}
+    var onLinkCodexDesktopSession: () -> Void = {}
     var onClearCodexDesktopSession: () -> Void = {}
     var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
@@ -23,6 +24,7 @@ struct AccountCardView: View {
     var isActiveCodexSession: Bool = false
     var canSwitchCodexSession: Bool = false
     var canCaptureCodexSession: Bool = false
+    var canLinkCodexDesktopSession: Bool = false
     var canClearCodexDesktopSession: Bool = false
     var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
@@ -116,6 +118,7 @@ struct AccountCardView: View {
                         onPin: onPin,
                         onSwitchCodexSession: onSwitchCodexSession,
                         onCaptureCodexSession: onCaptureCodexSession,
+                        onLinkCodexDesktopSession: onLinkCodexDesktopSession,
                         onClearCodexDesktopSession: onClearCodexDesktopSession,
                         onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
@@ -125,6 +128,7 @@ struct AccountCardView: View {
                         isActiveCodexSession: isActiveCodexSession,
                         canSwitchCodexSession: canSwitchCodexSession,
                         canCaptureCodexSession: canCaptureCodexSession,
+                        canLinkCodexDesktopSession: canLinkCodexDesktopSession,
                         canClearCodexDesktopSession: canClearCodexDesktopSession,
                         canEnableCodexCLI: canEnableCodexCLI
                     )
@@ -545,6 +549,7 @@ struct CompactAccountRow: View {
     var onPin: () -> Void = {}
     var onSwitchCodexSession: () -> Void = {}
     var onCaptureCodexSession: () -> Void = {}
+    var onLinkCodexDesktopSession: () -> Void = {}
     var onClearCodexDesktopSession: () -> Void = {}
     var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
@@ -553,6 +558,7 @@ struct CompactAccountRow: View {
     var isActiveCodexSession: Bool = false
     var canSwitchCodexSession: Bool = false
     var canCaptureCodexSession: Bool = false
+    var canLinkCodexDesktopSession: Bool = false
     var canClearCodexDesktopSession: Bool = false
     var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
@@ -730,6 +736,7 @@ struct CompactAccountRow: View {
                         onPin: onPin,
                         onSwitchCodexSession: onSwitchCodexSession,
                         onCaptureCodexSession: onCaptureCodexSession,
+                        onLinkCodexDesktopSession: onLinkCodexDesktopSession,
                         onClearCodexDesktopSession: onClearCodexDesktopSession,
                         onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
@@ -739,6 +746,7 @@ struct CompactAccountRow: View {
                         isActiveCodexSession: isActiveCodexSession,
                         canSwitchCodexSession: canSwitchCodexSession,
                         canCaptureCodexSession: canCaptureCodexSession,
+                        canLinkCodexDesktopSession: canLinkCodexDesktopSession,
                         canClearCodexDesktopSession: canClearCodexDesktopSession,
                         canEnableCodexCLI: canEnableCodexCLI
                     )
@@ -835,6 +843,7 @@ struct AccountMenuButton: View {
     var onPin: () -> Void = {}
     var onSwitchCodexSession: () -> Void = {}
     var onCaptureCodexSession: () -> Void = {}
+    var onLinkCodexDesktopSession: () -> Void = {}
     var onClearCodexDesktopSession: () -> Void = {}
     var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
@@ -844,6 +853,7 @@ struct AccountMenuButton: View {
     var isActiveCodexSession: Bool = false
     var canSwitchCodexSession: Bool = false
     var canCaptureCodexSession: Bool = false
+    var canLinkCodexDesktopSession: Bool = false
     var canClearCodexDesktopSession: Bool = false
     var canEnableCodexCLI: Bool = false
 
@@ -872,6 +882,11 @@ struct AccountMenuButton: View {
                             Label("Save Codex Desktop session…", systemImage: "arrow.down.doc.fill")
                         }
                     }
+                    if canLinkCodexDesktopSession {
+                        Button { onLinkCodexDesktopSession() } label: {
+                            Label("Link to Codex user on disk…", systemImage: "link")
+                        }
+                    }
                     if canClearCodexDesktopSession {
                         Button(role: .destructive) { onClearCodexDesktopSession() } label: {
                             Label("Clear saved Codex Desktop session", systemImage: "trash")
@@ -880,6 +895,11 @@ struct AccountMenuButton: View {
                 } else if canCaptureCodexSession {
                     Button { onCaptureCodexSession() } label: {
                         Label("Save Codex Desktop session…", systemImage: "arrow.down.doc.fill")
+                    }
+                    if canLinkCodexDesktopSession {
+                        Button { onLinkCodexDesktopSession() } label: {
+                            Label("Link to Codex user on disk…", systemImage: "link")
+                        }
                     }
                     if canClearCodexDesktopSession {
                         Button(role: .destructive) { onClearCodexDesktopSession() } label: {

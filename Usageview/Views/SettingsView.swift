@@ -638,7 +638,7 @@ struct SettingsView: View {
                 subtitle: "Fix wrong account after a bad session save"
             ) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("If Codex opens the wrong user or shows “refresh token revoked” after switching, clear saved Desktop sessions and capture each account again (quit Codex before Save).")
+                    Text("If Codex opens the wrong user or you see “different OpenAI account”, clear saved sessions in Settings, then quit Codex (⌘Q). Use ⋯ → Link to Codex user on disk on the row that should match whoever is signed into Codex now, or sign into the right user in Codex and Save.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
