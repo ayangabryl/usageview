@@ -54,6 +54,25 @@ final class CodexOAuthSessionService: Sendable {
         snapshotsRootURL().appendingPathComponent(accountId.uuidString, isDirectory: true)
     }
 
+    /// Written on capture so restore can reject snapshots saved for the wrong OpenAI user.
+    private static let accountIdSidecarName = ".usageview-chatgpt-account-id"
+
+    private static func accountIdSidecarURL(for accountId: UUID) -> URL {
+        snapshotURL(for: accountId).appendingPathComponent(accountIdSidecarName)
+    }
+
+    private func writeAccountIdSidecar(_ chatgptAccountId: String, for accountId: UUID) {
+        let url = Self.accountIdSidecarURL(for: accountId)
+        try? chatgptAccountId.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func readAccountIdSidecar(for accountId: UUID) -> String? {
+        let url = Self.accountIdSidecarURL(for: accountId)
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     // MARK: - Security-scoped bookmark
 
     /// Returns a security-scoped URL for the Codex app support folder, prompting
@@ -109,7 +128,7 @@ final class CodexOAuthSessionService: Sendable {
     /// Capture the current Codex Desktop session for `accountId`.
     /// `grantedURL` is a security-scoped URL for the Codex app support folder (from NSOpenPanel).
     /// Throws `CodexOAuthError.captureFailed` with a human-readable reason on failure.
-    func captureCurrentSession(for accountId: UUID, from grantedURL: URL) throws {
+    func captureCurrentSession(for accountId: UUID, from grantedURL: URL, chatgptAccountId: String? = nil) throws {
         let fm = FileManager.default
         let dst = Self.snapshotURL(for: accountId)
 
@@ -148,6 +167,12 @@ final class CodexOAuthSessionService: Sendable {
                 reason: "No Codex session files could be saved. \(detail)\n\nMake sure you selected the Codex folder inside ~/Library/Application Support/."
             )
         }
+
+        if let chatgptAccountId, !chatgptAccountId.isEmpty {
+            writeAccountIdSidecar(chatgptAccountId, for: accountId)
+        } else {
+            try? FileManager.default.removeItem(at: Self.accountIdSidecarURL(for: accountId))
+        }
     }
 
     /// Switch to the saved session for `accountId`.
@@ -182,11 +207,38 @@ final class CodexOAuthSessionService: Sendable {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    /// Removes every per-account Desktop snapshot (does not touch live Codex on disk).
+    func removeAllSnapshots() {
+        let root = Self.snapshotsRootURL()
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func hasAnySnapshot() -> Bool {
+        let root = Self.snapshotsRootURL()
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root.path) else {
+            return false
+        }
+        return entries.contains { !$0.hasPrefix(".") }
+    }
+
     /// Restores Local Storage / cookies / partitions when Usageview already has a per-account snapshot.
     /// `codexSupportScopedURL` must be the real `~/Library/Application Support/Codex` directory under an
     /// active security-scoped bookmark (typically the user’s home folder grant).
-    func restoreSnapshotIfPresent(for accountId: UUID, codexSupportScopedURL: URL) throws {
+    /// When `expectedChatgptAccountId` is set, refuses to restore a snapshot tagged for a different user.
+    func restoreSnapshotIfPresent(
+        for accountId: UUID,
+        codexSupportScopedURL: URL,
+        expectedChatgptAccountId: String? = nil
+    ) throws {
         guard hasSnapshot(for: accountId) else { return }
+        if let expected = expectedChatgptAccountId, !expected.isEmpty {
+            guard let saved = readAccountIdSidecar(for: accountId) else {
+                throw CodexOAuthError.snapshotUntagged
+            }
+            if saved != expected {
+                throw CodexOAuthError.snapshotAccountMismatch(savedAccountId: saved, expectedAccountId: expected)
+            }
+        }
         try restoreSnapshot(for: accountId, to: codexSupportScopedURL)
     }
 
@@ -254,6 +306,8 @@ enum CodexOAuthError: LocalizedError {
     case codexRunning
     case captureFailed(reason: String)
     case restoreFailed(item: String, reason: String)
+    case snapshotAccountMismatch(savedAccountId: String, expectedAccountId: String)
+    case snapshotUntagged
 
     var errorDescription: String? {
         switch self {
@@ -265,6 +319,18 @@ enum CodexOAuthError: LocalizedError {
             return reason
         case .restoreFailed(let item, let reason):
             return "Failed to restore Codex session file \"\(item)\": \(reason)"
+        case .snapshotAccountMismatch:
+            return """
+            The saved Codex Desktop session belongs to a different OpenAI account than this Usageview row.
+
+            Use ⋯ → Clear saved Codex Desktop session on this account (and on your other accounts if you mixed them up). Then, for each account: sign into that user in Codex, quit Codex (⌘Q), and Save Codex Desktop session on the matching row.
+            """
+        case .snapshotUntagged:
+            return """
+            This Codex Desktop snapshot was saved while Codex was open or before account tagging, so it may be the wrong user.
+
+            Use ⋯ → Clear saved Codex Desktop session, then sign into the correct user in Codex, quit Codex (⌘Q), and Save Codex Desktop session on this row.
+            """
         }
     }
 }

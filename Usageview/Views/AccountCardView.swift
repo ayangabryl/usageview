@@ -15,6 +15,7 @@ struct AccountCardView: View {
     var onPin: () -> Void = {}
     var onSwitchCodexSession: () -> Void = {}
     var onCaptureCodexSession: () -> Void = {}
+    var onClearCodexDesktopSession: () -> Void = {}
     var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
@@ -22,6 +23,7 @@ struct AccountCardView: View {
     var isActiveCodexSession: Bool = false
     var canSwitchCodexSession: Bool = false
     var canCaptureCodexSession: Bool = false
+    var canClearCodexDesktopSession: Bool = false
     var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
     var canMoveDown: Bool = false
@@ -114,6 +116,7 @@ struct AccountCardView: View {
                         onPin: onPin,
                         onSwitchCodexSession: onSwitchCodexSession,
                         onCaptureCodexSession: onCaptureCodexSession,
+                        onClearCodexDesktopSession: onClearCodexDesktopSession,
                         onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
                         onMoveDown: onMoveDown,
@@ -122,6 +125,7 @@ struct AccountCardView: View {
                         isActiveCodexSession: isActiveCodexSession,
                         canSwitchCodexSession: canSwitchCodexSession,
                         canCaptureCodexSession: canCaptureCodexSession,
+                        canClearCodexDesktopSession: canClearCodexDesktopSession,
                         canEnableCodexCLI: canEnableCodexCLI
                     )
                 }
@@ -541,6 +545,7 @@ struct CompactAccountRow: View {
     var onPin: () -> Void = {}
     var onSwitchCodexSession: () -> Void = {}
     var onCaptureCodexSession: () -> Void = {}
+    var onClearCodexDesktopSession: () -> Void = {}
     var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
@@ -548,6 +553,7 @@ struct CompactAccountRow: View {
     var isActiveCodexSession: Bool = false
     var canSwitchCodexSession: Bool = false
     var canCaptureCodexSession: Bool = false
+    var canClearCodexDesktopSession: Bool = false
     var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
     var canMoveDown: Bool = false
@@ -724,6 +730,7 @@ struct CompactAccountRow: View {
                         onPin: onPin,
                         onSwitchCodexSession: onSwitchCodexSession,
                         onCaptureCodexSession: onCaptureCodexSession,
+                        onClearCodexDesktopSession: onClearCodexDesktopSession,
                         onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
                         onMoveDown: onMoveDown,
@@ -732,6 +739,7 @@ struct CompactAccountRow: View {
                         isActiveCodexSession: isActiveCodexSession,
                         canSwitchCodexSession: canSwitchCodexSession,
                         canCaptureCodexSession: canCaptureCodexSession,
+                        canClearCodexDesktopSession: canClearCodexDesktopSession,
                         canEnableCodexCLI: canEnableCodexCLI
                     )
                 } else {
@@ -827,6 +835,7 @@ struct AccountMenuButton: View {
     var onPin: () -> Void = {}
     var onSwitchCodexSession: () -> Void = {}
     var onCaptureCodexSession: () -> Void = {}
+    var onClearCodexDesktopSession: () -> Void = {}
     var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
@@ -835,6 +844,7 @@ struct AccountMenuButton: View {
     var isActiveCodexSession: Bool = false
     var canSwitchCodexSession: Bool = false
     var canCaptureCodexSession: Bool = false
+    var canClearCodexDesktopSession: Bool = false
     var canEnableCodexCLI: Bool = false
 
     var body: some View {
@@ -862,9 +872,19 @@ struct AccountMenuButton: View {
                             Label("Save Codex Desktop session…", systemImage: "arrow.down.doc.fill")
                         }
                     }
+                    if canClearCodexDesktopSession {
+                        Button(role: .destructive) { onClearCodexDesktopSession() } label: {
+                            Label("Clear saved Codex Desktop session", systemImage: "trash")
+                        }
+                    }
                 } else if canCaptureCodexSession {
                     Button { onCaptureCodexSession() } label: {
                         Label("Save Codex Desktop session…", systemImage: "arrow.down.doc.fill")
+                    }
+                    if canClearCodexDesktopSession {
+                        Button(role: .destructive) { onClearCodexDesktopSession() } label: {
+                            Label("Clear saved Codex Desktop session", systemImage: "trash")
+                        }
                     }
                 }
             }

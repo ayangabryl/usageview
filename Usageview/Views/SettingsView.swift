@@ -21,6 +21,8 @@ struct SettingsView: View {
     @State private var editingAccountId: UUID? = nil
     @State private var editingLabel: String = ""
     @State private var showResetConfirmation = false
+    @State private var showClearCodexSnapshotsConfirmation = false
+    @State private var codexQuickFixMessage: String?
     @State private var selectedTab: SettingsTab = .accounts
 
     enum SettingsTab: String, CaseIterable {
@@ -623,6 +625,62 @@ struct SettingsView: View {
 
                 if allowGeminiCLIKeychainAccess && store.geminiAuth.oauthService.isCLIKeychainReadSuppressed {
                     Text("Gemini keychain access not granted yet. Toggle off/on to retry.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.top, -4)
+                }
+            }
+
+            providerCard(
+                serviceType: .chatgpt,
+                title: "ChatGPT & Codex Desktop",
+                subtitle: "Fix wrong account after a bad session save"
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("If Codex opens the wrong user or shows “refresh token revoked” after switching, clear saved Desktop sessions and capture each account again (quit Codex before Save).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if store.codexDesktopSnapshotCount() > 0 {
+                        Text("\(store.codexDesktopSnapshotCount()) saved Desktop session(s) in Usageview")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, 12)
+
+                settingsRow(
+                    icon: "arrow.triangle.2.circlepath",
+                    title: "Codex Desktop quick fix",
+                    subtitle: "Clear all saved Codex Desktop sessions (keeps your Usageview accounts)"
+                ) {
+                    Button("Clear All…", role: .destructive) {
+                        showClearCodexSnapshotsConfirmation = true
+                    }
+                    .controlSize(.small)
+                }
+                .confirmationDialog(
+                    "Clear Codex Desktop sessions?",
+                    isPresented: $showClearCodexSnapshotsConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Clear saved sessions", role: .destructive) {
+                        let cleared = store.clearAllCodexDesktopSessions()
+                        if cleared > 0 {
+                            codexQuickFixMessage = "Cleared \(cleared) saved session(s). For each account: sign into that user in Codex, quit Codex (⌘Q), then ⋯ → Save Codex Desktop session."
+                        } else {
+                            codexQuickFixMessage = "No saved Codex Desktop sessions were found. Sign into each user in Codex, quit, then save from the account menu."
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This only removes Usageview’s copies of Codex’s Application Support data. It does not disconnect accounts or delete Codex on your Mac. You will need to save each account again after signing in.")
+                }
+
+                if let codexQuickFixMessage {
+                    Text(codexQuickFixMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)

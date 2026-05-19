@@ -266,6 +266,7 @@ struct MenuBarContentView: View {
                 onPin: { store.togglePinToMenuBar(account) },
                 onSwitchCodexSession: { switchCodexSession(for: account) },
                 onCaptureCodexSession: { captureCodexSession(for: account) },
+                onClearCodexDesktopSession: { clearCodexDesktopSession(for: account) },
                 onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
                 onMoveDown: { store.moveAccountDown(id: account.id) },
@@ -273,6 +274,7 @@ struct MenuBarContentView: View {
                 isActiveCodexSession: store.isActiveCodexSession(for: account),
                 canSwitchCodexSession: store.canSwitchCodexSession(for: account),
                 canCaptureCodexSession: canCaptureCodexSession(for: account),
+                canClearCodexDesktopSession: store.hasCodexDesktopSnapshot(for: account),
                 canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
                 canMoveDown: store.canMoveDown(id: account.id),
@@ -316,6 +318,7 @@ struct MenuBarContentView: View {
                 onPin: { store.togglePinToMenuBar(account) },
                 onSwitchCodexSession: { switchCodexSession(for: account) },
                 onCaptureCodexSession: { captureCodexSession(for: account) },
+                onClearCodexDesktopSession: { clearCodexDesktopSession(for: account) },
                 onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
                 onMoveDown: { store.moveAccountDown(id: account.id) },
@@ -323,6 +326,7 @@ struct MenuBarContentView: View {
                 isActiveCodexSession: store.isActiveCodexSession(for: account),
                 canSwitchCodexSession: store.canSwitchCodexSession(for: account),
                 canCaptureCodexSession: canCaptureCodexSession(for: account),
+                canClearCodexDesktopSession: store.hasCodexDesktopSnapshot(for: account),
                 canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
                 canMoveDown: store.canMoveDown(id: account.id),
@@ -406,6 +410,11 @@ struct MenuBarContentView: View {
                 codexSwitchNotice = "✓ Saved Codex Desktop session for this account. Use “Switch to This in Codex” to move between accounts; repeat “Save Codex Desktop session” on each account after you sign in there."
             }
         }
+    }
+
+    private func clearCodexDesktopSession(for account: Account) {
+        store.clearCodexDesktopSession(for: account)
+        codexSwitchNotice = "Cleared saved Codex Desktop session for this account. Sign into the correct user in Codex, quit Codex (⌘Q), then Save Codex Desktop session on this row."
     }
 
     // MARK: - Pick Service Type

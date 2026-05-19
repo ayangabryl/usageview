@@ -1084,6 +1084,46 @@ final class AccountStore {
         codexOAuth.hasSnapshot(for: account.id)
     }
 
+    /// Removes the per-account Codex Desktop snapshot (Electron files). Does not disconnect Usageview or change `auth.json` on disk.
+    func clearCodexDesktopSession(for account: Account) {
+        codexOAuth.removeSnapshot(for: account.id)
+    }
+
+    /// How many Usageview rows currently have a saved Codex Desktop session folder.
+    func codexDesktopSnapshotCount() -> Int {
+        accounts.filter { codexOAuth.hasSnapshot(for: $0.id) }.count
+    }
+
+    /// Clears saved Codex Desktop snapshots for every account. Returns how many were removed.
+    @discardableResult
+    func clearAllCodexDesktopSessions() -> Int {
+        var cleared = 0
+        for account in accounts where codexOAuth.hasSnapshot(for: account.id) {
+            codexOAuth.removeSnapshot(for: account.id)
+            cleared += 1
+        }
+        if cleared == 0, codexOAuth.hasAnySnapshot() {
+            codexOAuth.removeAllSnapshots()
+            cleared = 1
+        }
+        return cleared
+    }
+
+    /// OpenAI `account_id` this row should use for Desktop snapshot capture/restore, when identities are aligned.
+    private func expectedChatgptAccountIdForCodexDesktop(for account: Account) -> String? {
+        if isCodexOAuth(account) {
+            guard let oauth = openaiAuth.chatgptAccountId(for: account.id), !oauth.isEmpty,
+                  let snap = codexAuth.snapshotChatgptAccountId(for: account.id), !snap.isEmpty,
+                  oauth == snap
+            else { return nil }
+            return oauth
+        }
+        if isCodexManaged(account) || account.serviceType == .codex {
+            return codexAuth.snapshotChatgptAccountId(for: account.id)
+        }
+        return nil
+    }
+
     /// Saves **both** the current `auth.json` (into this Usageview row) and a full **Codex Desktop**
     /// Application Support snapshot so “Switch to This in Codex” can restore the real Desktop session.
     ///
@@ -1112,8 +1152,18 @@ final class AccountStore {
             return "Codex Desktop has not created its data folder yet. Open the Codex app once while signed in, quit it (⌘Q), then try again."
         }
 
+        let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
+
         if isCodexOAuth(account) {
-            let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
+            guard let oauthId = openaiAuth.chatgptAccountId(for: account.id), !oauthId.isEmpty else {
+                return "This Usageview account is missing OpenAI identity. Disconnect and sign in again, then retry."
+            }
+            guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL), !diskId.isEmpty else {
+                return "Could not read which account Codex Desktop is using. Quit Codex (⌘Q), open Codex signed in as this user, quit again, then Save."
+            }
+            guard diskId == oauthId else {
+                return "Codex Desktop is signed in as a different OpenAI account than this Usageview row.\n\nQuit Codex (⌘Q), sign in here as the user for “\(account.username ?? account.label)”, quit Codex again, then Save Codex Desktop session."
+            }
             do {
                 let info = try codexAuth.connectFromCLI(for: account.id, authFileURL: fileURL)
                 if let index = accounts.firstIndex(where: { $0.id == account.id }) {
@@ -1127,7 +1177,6 @@ final class AccountStore {
             guard codexAuth.hasSavedSession(for: account.id) else {
                 return CodexAuthError.noSavedSession.localizedDescription
             }
-            let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
             guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL),
                   let snapId = codexAuth.snapshotChatgptAccountId(for: account.id),
                   !diskId.isEmpty, !snapId.isEmpty, diskId == snapId
@@ -1138,8 +1187,15 @@ final class AccountStore {
             return "This account type does not use Codex Desktop switching."
         }
 
+        let taggedAccountId = codexAuth.snapshotChatgptAccountId(for: account.id)
+            ?? codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL)
+
         do {
-            try codexOAuth.captureCurrentSession(for: account.id, from: codexSupport)
+            try codexOAuth.captureCurrentSession(
+                for: account.id,
+                from: codexSupport,
+                chatgptAccountId: taggedAccountId
+            )
         } catch {
             return "Could not copy Codex Desktop session files: \(error.localizedDescription)\n\nQuit Codex completely (⌘Q), wait a few seconds, and try again."
         }
@@ -1167,7 +1223,11 @@ final class AccountStore {
 
         let codexSupport = homeURL.appendingPathComponent("Library/Application Support/Codex", isDirectory: true)
         if codexOAuth.hasSnapshot(for: account.id) {
-            try codexOAuth.restoreSnapshotIfPresent(for: account.id, codexSupportScopedURL: codexSupport)
+            try codexOAuth.restoreSnapshotIfPresent(
+                for: account.id,
+                codexSupportScopedURL: codexSupport,
+                expectedChatgptAccountId: expectedChatgptAccountIdForCodexDesktop(for: account)
+            )
         }
     }
 
