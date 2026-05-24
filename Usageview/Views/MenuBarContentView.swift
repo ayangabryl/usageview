@@ -11,8 +11,6 @@ struct MenuBarContentView: View {
     @State private var renameText: String = ""
     @State private var detailTab: DetailTab = .overview
     @State private var showCostBreakdownPopover: Bool = false
-    @State private var codexSwitchError: String?
-    @State private var codexSwitchNotice: String?
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -89,26 +87,6 @@ struct MenuBarContentView: View {
         }
         .frame(width: 320)
         .animation(.easeInOut(duration: 0.15), value: screen)
-        .alert("Couldn’t switch Codex account", isPresented: Binding(
-            get: { codexSwitchError != nil },
-            set: { isPresented in
-                if !isPresented { codexSwitchError = nil }
-            }
-        )) {
-            Button("OK", role: .cancel) { codexSwitchError = nil }
-        } message: {
-            Text(codexSwitchError ?? "")
-        }
-        .alert("Account Switched", isPresented: Binding(
-            get: { codexSwitchNotice != nil },
-            set: { isPresented in
-                if !isPresented { codexSwitchNotice = nil }
-            }
-        )) {
-            Button("Got it") { codexSwitchNotice = nil }
-        } message: {
-            Text(codexSwitchNotice ?? "")
-        }
     }
 
     // MARK: - Main Screen
@@ -264,20 +242,9 @@ struct MenuBarContentView: View {
                 onRemove: { store.removeAccount(id: account.id) },
                 onTap: { navigate(to: .accountDetail(account.id)) },
                 onPin: { store.togglePinToMenuBar(account) },
-                onSwitchCodexSession: { switchCodexSession(for: account) },
-                onCaptureCodexSession: { captureCodexSession(for: account) },
-                onLinkCodexDesktopSession: { linkCodexDesktopSession(for: account) },
-                onClearCodexDesktopSession: { clearCodexDesktopSession(for: account) },
-                onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
                 onMoveDown: { store.moveAccountDown(id: account.id) },
                 isPinned: store.isPinnedToMenuBar(account),
-                isActiveCodexSession: store.isActiveCodexSession(for: account),
-                canSwitchCodexSession: store.canSwitchCodexSession(for: account),
-                canCaptureCodexSession: canCaptureCodexSession(for: account),
-                canLinkCodexDesktopSession: canCaptureCodexSession(for: account),
-                canClearCodexDesktopSession: store.hasCodexDesktopSnapshot(for: account),
-                canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
                 canMoveDown: store.canMoveDown(id: account.id),
                 showWeeklyLimit: store.showWeeklyLimit
@@ -318,20 +285,9 @@ struct MenuBarContentView: View {
                 onRemove: { store.removeAccount(id: account.id) },
                 onTap: { navigate(to: .accountDetail(account.id)) },
                 onPin: { store.togglePinToMenuBar(account) },
-                onSwitchCodexSession: { switchCodexSession(for: account) },
-                onCaptureCodexSession: { captureCodexSession(for: account) },
-                onLinkCodexDesktopSession: { linkCodexDesktopSession(for: account) },
-                onClearCodexDesktopSession: { clearCodexDesktopSession(for: account) },
-                onEnableCodexCLI: { enableCodexCLI(for: account) },
                 onMoveUp: { store.moveAccountUp(id: account.id) },
                 onMoveDown: { store.moveAccountDown(id: account.id) },
                 isPinned: store.isPinnedToMenuBar(account),
-                isActiveCodexSession: store.isActiveCodexSession(for: account),
-                canSwitchCodexSession: store.canSwitchCodexSession(for: account),
-                canCaptureCodexSession: canCaptureCodexSession(for: account),
-                canLinkCodexDesktopSession: canCaptureCodexSession(for: account),
-                canClearCodexDesktopSession: store.hasCodexDesktopSnapshot(for: account),
-                canEnableCodexCLI: false,
                 canMoveUp: store.canMoveUp(id: account.id),
                 canMoveDown: store.canMoveDown(id: account.id),
                 showWeeklyLimit: store.showWeeklyLimit
@@ -360,75 +316,6 @@ struct MenuBarContentView: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 3)
-    }
-
-    private func switchCodexSession(for account: Account) {
-        if store.isCodexManaged(account) {
-            Task {
-                if let message = await store.activateCodexManagedSession(for: account) {
-                    if message.hasPrefix("✓") {
-                        codexSwitchNotice = message
-                    } else {
-                        codexSwitchError = message
-                    }
-                }
-            }
-        } else if store.isCodexOAuth(account) {
-            Task {
-                if let message = await store.activateCodexOAuthSession(for: account) {
-                    if message.hasPrefix("✓") {
-                        codexSwitchNotice = message
-                    } else {
-                        codexSwitchError = message
-                    }
-                }
-            }
-        }
-    }
-
-    private func enableCodexCLI(for account: Account) {
-        guard account.serviceType == .chatgpt else { return }
-        // Navigate to the CLI import screen WITHOUT touching the account's existing
-        // auth method or credentials — they are only updated on successful import.
-        navigate(to: .connectOpenAICodexCLI(account.id))
-    }
-
-    /// ChatGPT (OAuth or Codex-managed) and standalone Codex rows can save a Desktop session snapshot.
-    private func canCaptureCodexSession(for account: Account) -> Bool {
-        guard store.isConnected(for: account) else { return false }
-        switch account.serviceType {
-        case .chatgpt:
-            return store.isCodexOAuth(account) || store.isCodexManaged(account)
-        case .codex:
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func captureCodexSession(for account: Account) {
-        Task {
-            if let error = await store.captureCodexDesktopSession(for: account) {
-                codexSwitchError = error
-            } else {
-                codexSwitchNotice = "✓ Saved Codex Desktop session for this account. Use “Switch to This in Codex” to move between accounts; repeat “Save Codex Desktop session” on each account after you sign in there."
-            }
-        }
-    }
-
-    private func linkCodexDesktopSession(for account: Account) {
-        Task {
-            if let error = await store.captureCodexDesktopSession(for: account, adoptCodexUserOnDisk: true) {
-                codexSwitchError = error
-            } else {
-                codexSwitchNotice = "✓ Linked this Usageview row to the OpenAI user currently in Codex Desktop. You can switch with “Switch to This in Codex”."
-            }
-        }
-    }
-
-    private func clearCodexDesktopSession(for account: Account) {
-        store.clearCodexDesktopSession(for: account)
-        codexSwitchNotice = "Cleared saved Codex Desktop session for this account. Sign into the correct user in Codex, quit Codex (⌘Q), then Save Codex Desktop session on this row."
     }
 
     // MARK: - Pick Service Type
@@ -1495,13 +1382,6 @@ struct MenuBarContentView: View {
                                             label: "Auth",
                                             value: authMethodLabel(for: account)
                                         )
-                                        if account.serviceType == .chatgpt {
-                                            Divider().padding(.horizontal, 10)
-                                            detailInfoRow(
-                                                label: "Codex Quick Switch",
-                                                value: codexQuickSwitchStatus(for: account)
-                                            )
-                                        }
                                         if let plan = account.planName {
                                             Divider().padding(.horizontal, 10)
                                             detailInfoRow(label: "Plan", value: plan)
@@ -1676,25 +1556,6 @@ struct MenuBarContentView: View {
         case .apiKey: "API Key"
         case .codexCLI: "Codex CLI"
         }
-    }
-
-    private func codexQuickSwitchStatus(for account: Account) -> String {
-        guard account.serviceType == .chatgpt else { return "Not applicable" }
-        let desktop = store.hasCodexDesktopSnapshot(for: account)
-        let desktopBit = desktop ? " · Full Desktop snapshot saved" : " · Save Desktop session in ⋯ (once per account)"
-        if account.authMethod == .codexCLI {
-            if store.isActiveCodexSession(for: account) {
-                return "Enabled · Current in Codex\(desktopBit)"
-            }
-            if store.hasSavedCodexSession(for: account) {
-                return "Enabled\(desktopBit)"
-            }
-            return "Not enabled yet (import needed)"
-        }
-        if store.hasSavedCodexOAuthSession(for: account) {
-            return "Codex linked — switch from ⋯\(desktopBit)"
-        }
-        return "Auto-links when Codex on this Mac uses this account (needs folder access once)\(desktopBit)"
     }
 
     private func detailUsageSource(for account: Account) -> String {
@@ -3518,15 +3379,9 @@ struct CodexInlineConnectView: View {
 
             ServiceIconView(serviceType: .chatgpt, avatarURL: nil, size: 48)
 
-            Text("Sign in with your OpenAI account below. Your browser opens with a short code—the same sign-in Codex uses. Everything happens in Usageview; no Terminal. The Codex app is unchanged until you use Switch to This in Codex from the account menu.")
+            Text("Sign in with your OpenAI account below. Your browser opens with a short code—the same sign-in Codex CLI uses. Everything happens in Usageview; no Terminal.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
-
-            Text("For Codex Desktop: after you open Codex signed in as this user once, quit Codex (⌘Q), then use the account ⋯ menu → Save Codex Desktop session so switching restores the full app, not only auth.json.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 

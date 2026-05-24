@@ -49,6 +49,102 @@ final class CodexAuthService: Sendable {
         ]
     }
 
+    /// Result of scanning Codex `auth.json` under the user home (Desktop is canonical for Codex app).
+    struct DiskAuthSnapshot: Sendable {
+        var accountId: String?
+        var sourceURL: URL
+        /// CLI `auth.json` when it exists and disagrees with Desktop — never auto-merged.
+        var conflictingCLIAccountId: String?
+        var conflictingCLIURL: URL?
+
+        var hasDesktopCLIConflict: Bool {
+            conflictingCLIAccountId != nil
+                && accountId != nil
+                && conflictingCLIAccountId != accountId
+        }
+    }
+
+    /// Codex Desktop Application Support `auth.json` is the source of truth for who is signed into the app.
+    func readCanonicalDiskAuth(underUserHome home: URL) -> DiskAuthSnapshot {
+        let desktopURL = home.appendingPathComponent("Library/Application Support/Codex/auth.json")
+        let cliURL = home.appendingPathComponent(".codex/auth.json")
+        let fallback = Self.preferredAuthJSONURLForRead(underUserHome: home)
+
+        let desktopId = FileManager.default.fileExists(atPath: desktopURL.path)
+            ? readChatGPTAccountIdFromAuthFile(at: desktopURL) : nil
+        let cliId = FileManager.default.fileExists(atPath: cliURL.path)
+            ? readChatGPTAccountIdFromAuthFile(at: cliURL) : nil
+
+        if let desktopId, !desktopId.isEmpty {
+            let conflict = cliId != nil && cliId != desktopId
+            return DiskAuthSnapshot(
+                accountId: desktopId,
+                sourceURL: desktopURL,
+                conflictingCLIAccountId: conflict ? cliId : nil,
+                conflictingCLIURL: conflict ? cliURL : nil
+            )
+        }
+        if let cliId, !cliId.isEmpty {
+            return DiskAuthSnapshot(accountId: cliId, sourceURL: cliURL, conflictingCLIAccountId: nil, conflictingCLIURL: nil)
+        }
+        return DiskAuthSnapshot(accountId: nil, sourceURL: fallback, conflictingCLIAccountId: nil, conflictingCLIURL: nil)
+    }
+
+    /// When Desktop and CLI `auth.json` disagree, copy whichever file matches `targetAccountId` to all paths.
+    /// Fixes Codex UI showing user A while Application Support still holds user B’s tokens (CLI often updates first).
+    @discardableResult
+    func reconcileAuthJSONPreferringTargetAccount(_ targetAccountId: String, underUserHome home: URL) throws -> Bool {
+        guard !targetAccountId.isEmpty else { return false }
+        let snapshot = readCanonicalDiskAuth(underUserHome: home)
+        guard snapshot.hasDesktopCLIConflict else { return false }
+
+        let sourceURL: URL?
+        if snapshot.accountId == targetAccountId {
+            sourceURL = snapshot.sourceURL
+        } else if snapshot.conflictingCLIAccountId == targetAccountId {
+            sourceURL = snapshot.conflictingCLIURL
+        } else {
+            return false
+        }
+        guard let sourceURL else { return false }
+
+        let data = try Data(contentsOf: sourceURL)
+        for url in Self.authJSONURLsUnderUserHome(home) {
+            let directory = url.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        }
+        return true
+    }
+
+    /// Only sync token files when both paths already represent the **same** OpenAI user (refresh copy).
+    @discardableResult
+    func syncAuthJSONFilesWhenSameAccount(underUserHome home: URL) throws -> Bool {
+        let snapshot = readCanonicalDiskAuth(underUserHome: home)
+        guard !snapshot.hasDesktopCLIConflict, let accountId = snapshot.accountId, !accountId.isEmpty else {
+            return false
+        }
+        var newestURL = snapshot.sourceURL
+        var newestDate = (try? newestURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate ?? .distantPast
+        if let cliURL = snapshot.conflictingCLIURL,
+           let cliId = snapshot.conflictingCLIAccountId,
+           cliId == accountId,
+           let cliDate = (try? cliURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate,
+           cliDate > newestDate {
+            newestURL = cliURL
+            newestDate = cliDate
+        }
+        let data = try Data(contentsOf: newestURL)
+        for url in Self.authJSONURLsUnderUserHome(home) {
+            let directory = url.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        }
+        return true
+    }
+
     /// Prefer an existing `auth.json` under `home` (Desktop path first), else `~/.codex/auth.json`.
     static func preferredAuthJSONURLForRead(underUserHome home: URL) -> URL {
         if home.lastPathComponent == ".codex" {

@@ -5,6 +5,7 @@ import AppKit
 struct UsageviewApp: App {
     @State private var store = AccountStore()
     @State private var refreshTimer: Timer?
+    @State private var didInitialRefresh = false
     #if !MAS
     @State private var sparkle = SparkleUpdater()
     #else
@@ -21,7 +22,10 @@ struct UsageviewApp: App {
         MenuBarExtra {
             MenuBarContentView(store: store)
                 .task {
-                    await store.refreshAll()
+                    if !didInitialRefresh {
+                        didInitialRefresh = true
+                        await store.refreshAll(showLoading: false)
+                    }
                     startAutoRefreshIfNeeded()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
@@ -48,7 +52,7 @@ struct UsageviewApp: App {
 
         refreshTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes * 60), repeats: true) { _ in
             Task { @MainActor in
-                await store.refreshAll()
+                await store.refreshAll(showLoading: false)
             }
         }
     }

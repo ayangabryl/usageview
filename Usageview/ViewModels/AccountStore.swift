@@ -80,7 +80,6 @@ final class AccountStore {
     let augmentAuth: AugmentAuthService
     let jetbrainsAuth: JetBrainsAuthService
     let codexAuth: CodexAuthService
-    let codexOAuth: CodexOAuthSessionService
     let zaiAuth: ZaiAuthService
     private let githubUsage: GitHubUsageService
     private let claudeUsage: AnthropicUsageService
@@ -120,7 +119,6 @@ final class AccountStore {
         self.augmentAuth = au
         self.jetbrainsAuth = jb
         self.codexAuth = cx
-        self.codexOAuth = CodexOAuthSessionService()
         self.zaiAuth = za
         self.githubUsage = GitHubUsageService(authService: gh)
         self.claudeUsage = AnthropicUsageService(authService: cl)
@@ -155,7 +153,6 @@ final class AccountStore {
         }
         load()
         KeychainMigration.cleanupOrphanedTokens(keepingAccountIds: Set(accounts.map(\.id)))
-        startCodexSnapshotRefreshTimer()
     }
 
     // MARK: - Persistence
@@ -221,7 +218,6 @@ final class AccountStore {
         case .jetbrainsAI: jetbrainsAuth.disconnect(accountId: id)
         case .codex:
             codexAuth.disconnect(accountId: id)
-            codexOAuth.removeSnapshot(for: id)
         case .zai: zaiAuth.disconnect(accountId: id)
         }
         accounts.removeAll { $0.id == id }
@@ -245,7 +241,6 @@ final class AccountStore {
         case .jetbrainsAI: jetbrainsAuth.disconnect(accountId: id)
         case .codex:
             codexAuth.disconnect(accountId: id)
-            codexOAuth.removeSnapshot(for: id)
         case .zai: zaiAuth.disconnect(accountId: id)
         }
         if let index = accounts.firstIndex(where: { $0.id == id }) {
@@ -273,10 +268,7 @@ final class AccountStore {
             save()
             flashMenuBarCheckmark()
             if accounts[index].serviceType == .chatgpt, accounts[index].authMethod == .oauth {
-                Task {
-                    _ = await openaiAuth.discoverChatgptAccountId(for: id)
-                    syncCodexSnapshotsFromDisk()
-                }
+                Task { _ = await openaiAuth.discoverChatgptAccountId(for: id) }
             }
         }
     }
@@ -418,9 +410,15 @@ final class AccountStore {
         return formatter.string(from: date)
     }
 
-    func refreshAccount(_ account: Account) async {
-        refreshingIds.insert(account.id)
-        defer { refreshingIds.remove(account.id) }
+    func refreshAccount(_ account: Account, showLoading: Bool = true) async {
+        if showLoading {
+            refreshingIds.insert(account.id)
+        }
+        defer {
+            if showLoading {
+                refreshingIds.remove(account.id)
+            }
+        }
 
         // App Review demo mode: if the account's API key is the magic demo key,
         // return mock data instead of making real network calls.
@@ -556,9 +554,6 @@ final class AccountStore {
                     let storedAccount = accounts[index]
                     storeLogger.info("ChatGPT stored: fiveHour=\(storedAccount.fiveHourUsage ?? -1) sevenDay=\(storedAccount.sevenDayUsage ?? -1) isStatusOnly=\(storedAccount.isStatusOnly) hasDualWindows=\(storedAccount.hasDualWindows)")
                     save()
-                    if account.authMethod == .oauth {
-                        syncCodexSnapshotsFromDisk()
-                    }
                 } else {
                     storeLogger.error("ChatGPT store: account NOT FOUND in array!")
                 }
@@ -775,12 +770,12 @@ final class AccountStore {
         }
     }
 
-    func refreshAll() async {
+    func refreshAll(showLoading: Bool = true) async {
         let connected = accounts.filter { isConnected(for: $0) }
         await withTaskGroup(of: Void.self) { group in
             for account in connected {
                 group.addTask { @MainActor in
-                    await self.refreshAccount(account)
+                    await self.refreshAccount(account, showLoading: showLoading)
                 }
             }
         }
@@ -813,596 +808,6 @@ final class AccountStore {
         refreshingIds.contains(account.id)
     }
 
-    func isCodexManaged(_ account: Account) -> Bool {
-        (account.serviceType == .chatgpt && account.authMethod == .codexCLI) || account.serviceType == .codex
-    }
-
-    func isCodexOAuth(_ account: Account) -> Bool {
-        account.serviceType == .chatgpt && account.authMethod == .oauth
-    }
-
-    // MARK: - CLI session helpers
-
-    func hasSavedCodexSession(for account: Account) -> Bool {
-        guard isCodexManaged(account) else { return false }
-        return codexAuth.hasSavedSession(for: account.id)
-    }
-
-    func isActiveCodexSession(for account: Account) -> Bool {
-        if isCodexManaged(account) { return codexAuth.isActiveSession(for: account.id) }
-        if isCodexOAuth(account) {
-            guard codexAuth.isActiveSession(for: account.id) else { return false }
-            // Require explicit proof this Usageview row is the same OpenAI user as the snapshot
-            // and disk (isActiveSession). Never default to "active" when ids are missing — that
-            // disabled "Switch" on every row and showed duplicate green dots.
-            guard let oauthAcc = openaiAuth.resolvedChatgptAccountId(for: account.id), !oauthAcc.isEmpty,
-                  let snapAcc = codexAuth.snapshotChatgptAccountId(for: account.id), !snapAcc.isEmpty
-            else { return false }
-            return oauthAcc == snapAcc
-        }
-        return false
-    }
-
-    /// Switch active Codex session for a ChatGPT account using **Codex-managed** auth (`authMethod == .codexCLI`).
-    /// Uses the same quit + scoped `auth.json` + optional Electron snapshot restore as OAuth switching.
-    func activateCodexManagedSession(for account: Account) async -> String? {
-        await activateCodexDiskSwitchWithQuitSequence(for: account)
-    }
-
-    // MARK: - OAuth session helpers
-    // ChatGPT OAuth + Codex: tokens live in auth.json. Codex Desktop often uses
-    // ~/Library/Application Support/Codex/auth.json while the CLI uses ~/.codex/auth.json.
-    // The sandbox blocks direct access, so we bookmark the user's HOME directory
-    // (always visible in the file picker) and read/write both paths when switching.
-
-    private static let codexHomeDirBookmarkKey = "CodexHomeDirBookmarkV1"
-
-    /// Returns a security-scoped URL for the home directory.
-    /// Uses a stored bookmark when available; otherwise shows NSOpenPanel once.
-    /// Returns nil if the user cancels.
-    @MainActor
-    func resolveHomeDirWithPermission() -> URL? {
-        let key = Self.codexHomeDirBookmarkKey
-
-        // Try stored bookmark first.
-        if let data = UserDefaults.standard.data(forKey: key) {
-            var isStale = false
-            if let url = try? URL(resolvingBookmarkData: data,
-                                  options: .withSecurityScope,
-                                  relativeTo: nil,
-                                  bookmarkDataIsStale: &isStale) {
-                if isStale {
-                    // Silently renew the bookmark while we still have access.
-                    if let renewed = try? url.bookmarkData(options: .withSecurityScope,
-                                                           includingResourceValuesForKeys: nil,
-                                                           relativeTo: nil) {
-                        UserDefaults.standard.set(renewed, forKey: key)
-                    }
-                }
-                startCodexAuthFileWatcher()
-                return url
-            }
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-
-        // Prompt user to select their home folder (always visible, no hidden files needed).
-        let panel = NSOpenPanel()
-        panel.message = "Select your home folder (e.g. \"/Users/\(NSUserName())\") so Usageview can read and update Codex auth files under ~/.codex and Library/Application Support/Codex."
-        panel.prompt = "Grant Access"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.showsHiddenFiles = false
-        // Open at the parent of home so the home folder itself is visible and selectable.
-        panel.directoryURL = CodexAuthService.realHomeDirectory().deletingLastPathComponent()
-
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-
-        // Store bookmark — persists across restarts.
-        if let bookmarkData = try? url.bookmarkData(options: .withSecurityScope,
-                                                     includingResourceValuesForKeys: nil,
-                                                     relativeTo: nil) {
-            UserDefaults.standard.set(bookmarkData, forKey: key)
-        }
-        startCodexAuthFileWatcher()
-        return url
-    }
-
-    /// Resolves the security-scoped home URL from the stored bookmark WITHOUT showing
-    /// any UI. Silently renews stale bookmarks. Returns nil only if the bookmark is missing.
-    private func resolveHomeDirSilent() -> URL? {
-        guard let data = UserDefaults.standard.data(forKey: Self.codexHomeDirBookmarkKey) else { return nil }
-        var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: data,
-                                 options: .withSecurityScope,
-                                 relativeTo: nil,
-                                 bookmarkDataIsStale: &isStale) else { return nil }
-        if isStale {
-            // Renew silently while we still have access.
-            if let renewed = try? url.bookmarkData(options: .withSecurityScope,
-                                                   includingResourceValuesForKeys: nil,
-                                                   relativeTo: nil) {
-                UserDefaults.standard.set(renewed, forKey: Self.codexHomeDirBookmarkKey)
-            }
-        }
-        return url
-    }
-
-    // MARK: - Live Codex snapshot sync (timer + file watcher)
-
-    private var codexSnapshotTimer: Timer?
-    private var codexAuthWatcherDirFD: Int32 = -1
-    private var codexAuthWatcherDirSource: DispatchSourceFileSystemObject?
-    private var codexAuthWatcherAppSupportDirFD: Int32 = -1
-    private var codexAuthWatcherAppSupportDirSource: DispatchSourceFileSystemObject?
-    /// Home URL security scope held while Codex auth directory watchers are active.
-    private var codexWatcherScopedHomeURL: URL?
-    /// Only one pending "reopen after user quits Codex" timer at a time.
-    private var codexOAuthReopenTimer: Timer?
-
-    /// Starts a 3-second timer plus directory watchers on `~/.codex` and Codex Application Support
-    /// so token refreshes are synced into saved snapshots quickly.
-    func startCodexSnapshotRefreshTimer() {
-        codexSnapshotTimer?.invalidate()
-        let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
-        }
-        RunLoop.main.add(t, forMode: .common)
-        codexSnapshotTimer = t
-
-        startCodexAuthFileWatcher()
-    }
-
-    /// Watches `~/.codex` and `~/Library/Application Support/Codex` for auth.json changes.
-    private func startCodexAuthFileWatcher() {
-        stopCodexAuthFileWatcher()
-        guard let homeURL = resolveHomeDirSilent() else { return }
-        guard homeURL.startAccessingSecurityScopedResource() else { return }
-        codexWatcherScopedHomeURL = homeURL
-
-        let dotCodexDir = homeURL.appendingPathComponent(".codex")
-        if FileManager.default.fileExists(atPath: dotCodexDir.path) {
-            let fd = open(dotCodexDir.path, O_EVTONLY)
-            if fd >= 0 {
-                codexAuthWatcherDirFD = fd
-                let source = DispatchSource.makeFileSystemObjectSource(
-                    fileDescriptor: fd,
-                    eventMask: [.write, .rename],
-                    queue: .main
-                )
-                source.setEventHandler { [weak self] in
-                    Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
-                }
-                let captured = fd
-                source.setCancelHandler {
-                    if captured >= 0 { close(captured) }
-                }
-                source.resume()
-                codexAuthWatcherDirSource = source
-            }
-        }
-
-        let appSupportCodexDir = homeURL.appendingPathComponent("Library/Application Support/Codex")
-        if FileManager.default.fileExists(atPath: appSupportCodexDir.path) {
-            let fd = open(appSupportCodexDir.path, O_EVTONLY)
-            if fd >= 0 {
-                codexAuthWatcherAppSupportDirFD = fd
-                let source = DispatchSource.makeFileSystemObjectSource(
-                    fileDescriptor: fd,
-                    eventMask: [.write, .rename],
-                    queue: .main
-                )
-                source.setEventHandler { [weak self] in
-                    Task { @MainActor [weak self] in self?.syncCodexSnapshotsFromDisk() }
-                }
-                let captured = fd
-                source.setCancelHandler {
-                    if captured >= 0 { close(captured) }
-                }
-                source.resume()
-                codexAuthWatcherAppSupportDirSource = source
-            }
-        }
-
-        if codexAuthWatcherDirSource == nil, codexAuthWatcherAppSupportDirSource == nil {
-            homeURL.stopAccessingSecurityScopedResource()
-            codexWatcherScopedHomeURL = nil
-        }
-    }
-
-    private func stopCodexAuthFileWatcher() {
-        codexAuthWatcherDirSource?.cancel()
-        codexAuthWatcherDirSource = nil
-        codexAuthWatcherAppSupportDirSource?.cancel()
-        codexAuthWatcherAppSupportDirSource = nil
-        codexAuthWatcherDirFD = -1
-        codexAuthWatcherAppSupportDirFD = -1
-        if let home = codexWatcherScopedHomeURL {
-            home.stopAccessingSecurityScopedResource()
-            codexWatcherScopedHomeURL = nil
-        }
-    }
-
-    /// ChatGPT accounts whose saved Codex snapshot matches that row’s OpenAI identity (OAuth),
-    /// so we never refresh the wrong row from on-disk `auth.json` during a switch.
-    private func codexSnapshotRefreshCandidateIds(excluding excludedId: UUID? = nil) -> [UUID] {
-        accounts.compactMap { account -> UUID? in
-            if let excludedId, account.id == excludedId { return nil }
-            guard account.serviceType == .chatgpt, codexAuth.hasSavedSession(for: account.id) else { return nil }
-            if isCodexOAuth(account) {
-            guard let oauth = openaiAuth.resolvedChatgptAccountId(for: account.id), !oauth.isEmpty,
-                  let snap = codexAuth.snapshotChatgptAccountId(for: account.id), !snap.isEmpty,
-                  oauth == snap else { return nil }
-            }
-            return account.id
-        }
-    }
-
-    /// Reads auth.json and refreshes any saved account snapshot whose account_id matches.
-    /// Runs silently — no UI, no prompts. Called both by the timer and the file watcher.
-    @MainActor
-    private func syncCodexSnapshotsFromDisk() {
-        guard let homeURL = resolveHomeDirSilent() else { return }
-        let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
-        let accessing = homeURL.startAccessingSecurityScopedResource()
-        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
-
-        let candidates = codexSnapshotRefreshCandidateIds()
-        codexAuth.refreshOutgoingSnapshots(for: candidates, authFileURL: fileURL)
-
-        autoBindOrHealOAuthCodexSnapshotsIfDiskMatchesCurrentUser(authFileURL: fileURL)
-    }
-
-    /// When `auth.json` on disk is the same OpenAI user as a ChatGPT OAuth row, copy it into
-    /// that row's snapshot automatically (or heal a mismatched snapshot). Requires home-folder
-    /// bookmark from any prior Codex switch / "link" action.
-    private func autoBindOrHealOAuthCodexSnapshotsIfDiskMatchesCurrentUser(authFileURL: URL) {
-        guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: authFileURL) else { return }
-
-        for account in accounts {
-            guard account.serviceType == .chatgpt, account.authMethod == .oauth else { continue }
-            guard isConnected(for: account) else { continue }
-            guard let oauthId = openaiAuth.resolvedChatgptAccountId(for: account.id), !oauthId.isEmpty else { continue }
-            guard oauthId == diskId else { continue }
-
-            let hasSnap = codexAuth.hasSavedSession(for: account.id)
-            let snapId = codexAuth.snapshotChatgptAccountId(for: account.id)
-            let needsHeal = hasSnap && (snapId != oauthId)
-            guard !hasSnap || needsHeal else { continue }
-
-            guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { continue }
-            guard let info = try? codexAuth.connectFromCLI(for: account.id, authFileURL: authFileURL) else { continue }
-            if let name = info.name { accounts[index].username = name }
-            save()
-        }
-    }
-
-    func hasSavedCodexOAuthSession(for account: Account) -> Bool {
-        guard isCodexOAuth(account) else { return false }
-        return codexAuth.hasSavedSession(for: account.id)
-    }
-
-    /// True when Usageview has copied Codex Desktop’s Electron session (Local Storage, cookies, …) for this row.
-    func hasCodexDesktopSnapshot(for account: Account) -> Bool {
-        codexOAuth.hasSnapshot(for: account.id)
-    }
-
-    /// Removes the per-account Codex Desktop snapshot (Electron files). Does not disconnect Usageview or change `auth.json` on disk.
-    func clearCodexDesktopSession(for account: Account) {
-        codexOAuth.removeSnapshot(for: account.id)
-    }
-
-    /// How many Usageview rows currently have a saved Codex Desktop session folder.
-    func codexDesktopSnapshotCount() -> Int {
-        accounts.filter { codexOAuth.hasSnapshot(for: $0.id) }.count
-    }
-
-    /// Clears saved Codex Desktop snapshots for every account. Returns how many were removed.
-    @discardableResult
-    func clearAllCodexDesktopSessions() -> Int {
-        var cleared = 0
-        for account in accounts where codexOAuth.hasSnapshot(for: account.id) {
-            codexOAuth.removeSnapshot(for: account.id)
-            cleared += 1
-        }
-        if cleared == 0, codexOAuth.hasAnySnapshot() {
-            codexOAuth.removeAllSnapshots()
-            cleared = 1
-        }
-        return cleared
-    }
-
-    /// OpenAI `account_id` stored for this Usageview row (keychain + JWT + `/me` only — never Codex on disk).
-    private func usageviewOpenAIAccountId(for account: Account) async -> String? {
-        _ = await openaiAuth.discoverChatgptAccountId(for: account.id)
-        if let id = openaiAuth.resolvedChatgptAccountId(for: account.id), !id.isEmpty { return id }
-        return nil
-    }
-
-    private func accountDisplayName(_ account: Account) -> String {
-        if !account.label.isEmpty { return account.label }
-        if let username = account.username, !username.isEmpty { return username }
-        return account.serviceType.displayName
-    }
-
-    private func accountRowMatchingOpenAIId(_ openAIAccountId: String, excluding excludedId: UUID) -> Account? {
-        accounts.first { account in
-            if account.id == excludedId { return false }
-            guard account.serviceType == .chatgpt, isConnected(for: account) else { return false }
-            guard let oauth = openaiAuth.resolvedChatgptAccountId(for: account.id), oauth == openAIAccountId else {
-                return false
-            }
-            return true
-        }
-    }
-
-    private static func shortOpenAIAccountId(_ id: String) -> String {
-        id.count > 12 ? String(id.prefix(8)) + "…" : id
-    }
-
-    /// OpenAI `account_id` this row should use for Desktop snapshot capture/restore, when identities are aligned.
-    private func expectedChatgptAccountIdForCodexDesktop(for account: Account) -> String? {
-        if isCodexOAuth(account) {
-            let oauth = openaiAuth.resolvedChatgptAccountId(for: account.id)
-            let snap = codexAuth.snapshotChatgptAccountId(for: account.id)
-            if let oauth, !oauth.isEmpty {
-                if let snap, !snap.isEmpty, snap != oauth { return oauth }
-                return oauth
-            }
-            return snap
-        }
-        if isCodexManaged(account) || account.serviceType == .codex {
-            return codexAuth.snapshotChatgptAccountId(for: account.id)
-        }
-        return nil
-    }
-
-    /// Saves **both** the current `auth.json` (into this Usageview row) and a full **Codex Desktop**
-    /// Application Support snapshot so “Switch to This in Codex” can restore the real Desktop session.
-    ///
-    /// Flow: grant home-folder access once if needed → sync `auth.json` from disk for OAuth rows →
-    /// copy `~/Library/Application Support/Codex/` session files into Usageview’s container.
-    /// Best results: **quit Codex (⌘Q)** first so files are not locked.
-    func captureCodexDesktopSession(for account: Account, adoptCodexUserOnDisk: Bool = false) async -> String? {
-        switch account.serviceType {
-        case .chatgpt, .codex:
-            break
-        default:
-            return "Codex Desktop capture applies to ChatGPT or Codex accounts only."
-        }
-        guard isConnected(for: account) else {
-            return "Connect this account first."
-        }
-
-        guard let homeURL = resolveHomeDirWithPermission() else {
-            return nil  // user cancelled
-        }
-        let accessing = homeURL.startAccessingSecurityScopedResource()
-        defer { if accessing { homeURL.stopAccessingSecurityScopedResource() } }
-
-        let codexSupport = homeURL.appendingPathComponent("Library/Application Support/Codex", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: codexSupport.path) else {
-            return "Codex Desktop has not created its data folder yet. Open the Codex app once while signed in, quit it (⌘Q), then try again."
-        }
-
-        let fileURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
-
-        if isCodexOAuth(account) {
-            guard var oauthId = await usageviewOpenAIAccountId(for: account) else {
-                return """
-                This Usageview account is not fully linked to OpenAI yet.
-
-                Open the account menu → Connect (or Disconnect and sign in again). Wait until sign-in finishes—not only the code screen—then quit Codex (⌘Q) and Save Codex Desktop session.
-                """
-            }
-            guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL), !diskId.isEmpty else {
-                return "Could not read which account Codex Desktop is using. Quit Codex (⌘Q), open Codex signed in as this user, quit again, then Save."
-            }
-            if diskId != oauthId {
-                if adoptCodexUserOnDisk {
-                    openaiAuth.persistChatgptAccountId(diskId, for: account.id)
-                    oauthId = diskId
-                } else {
-                    let usageName = accountDisplayName(account)
-                    let other = accountRowMatchingOpenAIId(diskId, excluding: account.id)
-                    var msg = """
-                    Codex Desktop and this Usageview row don’t match.
-
-                    • Usageview “\(usageName)”: \(Self.shortOpenAIAccountId(oauthId))
-                    • Codex on disk right now: \(Self.shortOpenAIAccountId(diskId))
-                    """
-                    if let other {
-                        msg += "\n\nCodex is signed in as your other row “\(accountDisplayName(other))”. Either save on that row, or sign into “\(usageName)” inside Codex (⌘Q between steps)."
-                    } else {
-                        msg += "\n\nSign into “\(usageName)” inside Codex, quit Codex (⌘Q), then Save—or use ⋯ → Link to Codex user on disk if this row should track whoever Codex has now."
-                    }
-                    return msg
-                }
-            }
-            do {
-                let info = try codexAuth.connectFromCLI(for: account.id, authFileURL: fileURL)
-                if let index = accounts.firstIndex(where: { $0.id == account.id }) {
-                    if let name = info.name { accounts[index].username = name }
-                    save()
-                }
-            } catch {
-                return "Could not read Codex auth from disk: \(error.localizedDescription)\n\nSign into this account in Codex Desktop (or switch to it), quit Codex, then try again."
-            }
-        } else if isCodexManaged(account) {
-            guard codexAuth.hasSavedSession(for: account.id) else {
-                return CodexAuthError.noSavedSession.localizedDescription
-            }
-            guard let diskId = codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL),
-                  let snapId = codexAuth.snapshotChatgptAccountId(for: account.id),
-                  !diskId.isEmpty, !snapId.isEmpty, diskId == snapId
-            else {
-                return "Codex Desktop is not on this account right now. Use “Switch to This in Codex” (or sign in in Codex), quit Codex (⌘Q), then save the session again."
-            }
-        } else {
-            return "This account type does not use Codex Desktop switching."
-        }
-
-        let taggedAccountId = codexAuth.snapshotChatgptAccountId(for: account.id)
-            ?? codexAuth.readChatGPTAccountIdFromAuthFile(at: fileURL)
-
-        do {
-            try codexOAuth.captureCurrentSession(
-                for: account.id,
-                from: codexSupport,
-                chatgptAccountId: taggedAccountId
-            )
-        } catch {
-            return "Could not copy Codex Desktop session files: \(error.localizedDescription)\n\nQuit Codex completely (⌘Q), wait a few seconds, and try again."
-        }
-        return nil
-    }
-
-    /// Apply snapshot + optional per-account Electron session restore on disk.
-    /// `homeURL` must come from `resolveHomeDirWithPermission()`; this method manages security scope.
-    private func finalizeCodexSwitchOnDisk(for account: Account, homeURL: URL) throws {
-        let a = homeURL.startAccessingSecurityScopedResource()
-        defer { if a { homeURL.stopAccessingSecurityScopedResource() } }
-
-        let primaryReadURL = CodexAuthService.preferredAuthJSONURLForRead(underUserHome: homeURL)
-        let outgoing = codexSnapshotRefreshCandidateIds(excluding: account.id)
-        codexAuth.refreshOutgoingSnapshots(for: outgoing, authFileURL: primaryReadURL)
-
-        let info = try codexAuth.activateSession(for: account.id, userHomeDirectory: homeURL)
-        if let index = accounts.firstIndex(where: { $0.id == account.id }) {
-            accounts[index].username = info.name ?? accounts[index].username
-            if accounts[index].label.isEmpty, let infoName = info.name {
-                accounts[index].label = infoName
-            }
-            save()
-        }
-
-        let codexSupport = homeURL.appendingPathComponent("Library/Application Support/Codex", isDirectory: true)
-        if codexOAuth.hasSnapshot(for: account.id) {
-            try codexOAuth.restoreSnapshotIfPresent(
-                for: account.id,
-                codexSupportScopedURL: codexSupport,
-                expectedChatgptAccountId: expectedChatgptAccountIdForCodexDesktop(for: account)
-            )
-        }
-    }
-
-    /// Shared quit + write `auth.json` + optional Local Storage restore for ChatGPT Codex switching.
-    private func activateCodexDiskSwitchWithQuitSequence(for account: Account) async -> String? {
-        codexOAuthReopenTimer?.invalidate()
-        codexOAuthReopenTimer = nil
-
-        guard let homeURL = resolveHomeDirWithPermission() else {
-            return nil  // user cancelled
-        }
-
-        let bundleIds = ["com.openai.chat", "com.openai.codex"]
-        let running = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
-        var codexStillRunning = !running.isEmpty
-
-        guard codexAuth.hasSavedSession(for: account.id) else {
-            return CodexAuthError.noSavedSession.localizedDescription
-        }
-
-        // IMPORTANT: Do NOT write another account's tokens while Codex is running.
-        if codexStillRunning {
-            for bundleId in bundleIds {
-                var err: NSDictionary?
-                NSAppleScript(source: "tell application id \"\(bundleId)\" to quit")?.executeAndReturnError(&err)
-            }
-            running.forEach { $0.terminate() }
-
-            for _ in 0..<8 {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if bundleIds.flatMap({ NSRunningApplication.runningApplications(withBundleIdentifier: $0) }).isEmpty {
-                    codexStillRunning = false
-                    break
-                }
-            }
-
-            if codexStillRunning {
-                bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }.forEach { $0.forceTerminate() }
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if bundleIds.flatMap({ NSRunningApplication.runningApplications(withBundleIdentifier: $0) }).isEmpty {
-                    codexStillRunning = false
-                }
-            }
-        }
-
-        if !codexStillRunning {
-            do {
-                try finalizeCodexSwitchOnDisk(for: account, homeURL: homeURL)
-            } catch {
-                return error.localizedDescription
-            }
-            reopenCodexDesktopApp()
-            Task { await refreshAccount(account) }
-            if !codexOAuth.hasSnapshot(for: account.id) {
-                return "✓ Switched Codex auth. For reliable Codex Desktop switching, save the full app session once: tap ⋯ on this account → Save Codex Desktop session (quit Codex first)."
-            }
-            return nil
-        }
-
-        startCodexReopenWatcher(for: account, homeURL: homeURL)
-        var msg = "Quit Codex or ChatGPT (⌘Q). When it exits, Usageview will reopen it with this account."
-        if !codexOAuth.hasSnapshot(for: account.id) {
-            msg += " Then use ⋯ → Save Codex Desktop session so the next switch restores the full Desktop session."
-        }
-        return msg
-    }
-
-    /// Switch Codex Desktop to the saved session for this account (OAuth or Codex-managed).
-    ///
-    /// Strategy:
-    ///  1. Quit Codex / ChatGPT (do not write foreign tokens while they are running).
-    ///  2. Refresh other rows’ snapshots from disk when their saved identity matches.
-    ///  3. Write this account’s `auth.json` snapshot to **both** `~/.codex` and Application Support,
-    ///     restore Electron session files when Usageview has per-account snapshots, then reopen Codex.
-    ///  4. If quit fails, a timer waits for exit then performs the same steps.
-    func activateCodexOAuthSession(for account: Account) async -> String? {
-        await activateCodexDiskSwitchWithQuitSequence(for: account)
-    }
-
-    /// Polls every 2s until Codex/ChatGPT have quit, then writes the target snapshot and reopens Codex.
-    private func startCodexReopenWatcher(for account: Account, homeURL: URL) {
-        codexOAuthReopenTimer?.invalidate()
-
-        let bundleIds = ["com.openai.chat", "com.openai.codex"]
-        var attemptsLeft = 150   // up to 5 minutes
-
-        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] t in
-            guard let self else { t.invalidate(); return }
-            attemptsLeft -= 1
-            if attemptsLeft <= 0 {
-                t.invalidate()
-                self.codexOAuthReopenTimer = nil
-                return
-            }
-
-            let alive = bundleIds.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
-            guard alive.isEmpty else { return }
-
-            // Codex has fully exited — safe to write Account B's tokens now (nothing can overwrite).
-            t.invalidate()
-            self.codexOAuthReopenTimer = nil
-            try? self.finalizeCodexSwitchOnDisk(for: account, homeURL: homeURL)
-            self.reopenCodexDesktopApp()
-            Task { await self.refreshAccount(account) }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        codexOAuthReopenTimer = timer
-    }
-
-    func canSwitchCodexSession(for account: Account) -> Bool {
-        hasSavedCodexSession(for: account) || hasSavedCodexOAuthSession(for: account)
-    }
-
-    func isActiveSession(for account: Account) -> Bool {
-        if isCodexManaged(account) || isCodexOAuth(account) {
-            return isActiveCodexSession(for: account)
-        }
-        return false
-    }
-
     /// The account whose usage drives the menu bar display.
     var menuBarAccount: Account? {
         if let pinnedId = pinnedAccountId,
@@ -1423,17 +828,13 @@ final class AccountStore {
         UserDefaults.standard.set(viewMode.rawValue, forKey: "viewMode")
     }
 
-    /// Accounts grouped by service type
     private func disconnectOpenAI(accountId: UUID, authMethod: AuthMethod) {
         switch authMethod {
         case .codexCLI:
             codexAuth.disconnect(accountId: accountId)
         case .oauth, .apiKey:
             openaiAuth.disconnect(accountId: accountId)
-            // Linked Codex auth for this row (from disk import / device flow) must go with OpenAI sign-out.
-            codexAuth.disconnect(accountId: accountId)
         }
-        codexOAuth.removeSnapshot(for: accountId)
     }
 
     private func refreshCodexCLIUsage(for account: Account) async {
@@ -1580,21 +981,5 @@ final class AccountStore {
             isStale: accounts.isEmpty || accounts.allSatisfy { !isConnected(for: $0) },
             showCheckmark: showMenuBarCheckmark
         )
-    }
-
-    private func reopenCodexDesktopApp() {
-        let workspace = NSWorkspace.shared
-        let config = NSWorkspace.OpenConfiguration()
-        // Prefer standalone Codex when installed; ChatGPT bundle also hosts Codex on many setups.
-        for bundleId in ["com.openai.codex", "com.openai.chat"] {
-            if let appURL = workspace.urlForApplication(withBundleIdentifier: bundleId) {
-                workspace.openApplication(at: appURL, configuration: config, completionHandler: nil)
-                return
-            }
-        }
-        let fallbackURL = URL(fileURLWithPath: "/Applications/Codex.app")
-        if FileManager.default.fileExists(atPath: fallbackURL.path) {
-            workspace.openApplication(at: fallbackURL, configuration: config, completionHandler: nil)
-        }
     }
 }

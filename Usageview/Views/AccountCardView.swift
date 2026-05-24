@@ -13,20 +13,9 @@ struct AccountCardView: View {
     var onRemove: () -> Void = {}
     var onTap: () -> Void = {}
     var onPin: () -> Void = {}
-    var onSwitchCodexSession: () -> Void = {}
-    var onCaptureCodexSession: () -> Void = {}
-    var onLinkCodexDesktopSession: () -> Void = {}
-    var onClearCodexDesktopSession: () -> Void = {}
-    var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
     var isPinned: Bool = false
-    var isActiveCodexSession: Bool = false
-    var canSwitchCodexSession: Bool = false
-    var canCaptureCodexSession: Bool = false
-    var canLinkCodexDesktopSession: Bool = false
-    var canClearCodexDesktopSession: Bool = false
-    var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
     var canMoveDown: Bool = false
     var showWeeklyLimit: Bool = false
@@ -42,17 +31,6 @@ struct AccountCardView: View {
                     avatarURL: isConnected ? account.avatarURL : nil,
                     size: 28
                 )
-                .overlay(alignment: .bottomTrailing) {
-                    if isConnected && isActiveCodexSession {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 8, height: 8)
-                            .overlay(
-                                Circle()
-                                    .stroke(.white.opacity(0.9), lineWidth: 1)
-                            )
-                    }
-                }
 
                 if isRenaming {
                     HStack(spacing: 4) {
@@ -116,21 +94,10 @@ struct AccountCardView: View {
                             renamingId = account.id
                         },
                         onPin: onPin,
-                        onSwitchCodexSession: onSwitchCodexSession,
-                        onCaptureCodexSession: onCaptureCodexSession,
-                        onLinkCodexDesktopSession: onLinkCodexDesktopSession,
-                        onClearCodexDesktopSession: onClearCodexDesktopSession,
-                        onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
                         onMoveDown: onMoveDown,
                         onDisconnect: onDisconnect,
-                        onRemove: onRemove,
-                        isActiveCodexSession: isActiveCodexSession,
-                        canSwitchCodexSession: canSwitchCodexSession,
-                        canCaptureCodexSession: canCaptureCodexSession,
-                        canLinkCodexDesktopSession: canLinkCodexDesktopSession,
-                        canClearCodexDesktopSession: canClearCodexDesktopSession,
-                        canEnableCodexCLI: canEnableCodexCLI
+                        onRemove: onRemove
                     )
                 }
             }
@@ -547,20 +514,9 @@ struct CompactAccountRow: View {
     var onRemove: () -> Void = {}
     var onTap: () -> Void = {}
     var onPin: () -> Void = {}
-    var onSwitchCodexSession: () -> Void = {}
-    var onCaptureCodexSession: () -> Void = {}
-    var onLinkCodexDesktopSession: () -> Void = {}
-    var onClearCodexDesktopSession: () -> Void = {}
-    var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
     var isPinned: Bool = false
-    var isActiveCodexSession: Bool = false
-    var canSwitchCodexSession: Bool = false
-    var canCaptureCodexSession: Bool = false
-    var canLinkCodexDesktopSession: Bool = false
-    var canClearCodexDesktopSession: Bool = false
-    var canEnableCodexCLI: Bool = false
     var canMoveUp: Bool = false
     var canMoveDown: Bool = false
     var showWeeklyLimit: Bool = false
@@ -574,17 +530,6 @@ struct CompactAccountRow: View {
                 avatarURL: isConnected ? account.avatarURL : nil,
                 size: 20
             )
-            .overlay(alignment: .bottomTrailing) {
-                if isConnected && isActiveCodexSession {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 7, height: 7)
-                        .overlay(
-                            Circle()
-                                .stroke(.white.opacity(0.9), lineWidth: 1)
-                        )
-                }
-            }
 
             if isRenaming {
                 TextField("Name", text: $renameText)
@@ -734,21 +679,10 @@ struct CompactAccountRow: View {
                             renamingId = account.id
                         },
                         onPin: onPin,
-                        onSwitchCodexSession: onSwitchCodexSession,
-                        onCaptureCodexSession: onCaptureCodexSession,
-                        onLinkCodexDesktopSession: onLinkCodexDesktopSession,
-                        onClearCodexDesktopSession: onClearCodexDesktopSession,
-                        onEnableCodexCLI: onEnableCodexCLI,
                         onMoveUp: onMoveUp,
                         onMoveDown: onMoveDown,
                         onDisconnect: onDisconnect,
-                        onRemove: onRemove,
-                        isActiveCodexSession: isActiveCodexSession,
-                        canSwitchCodexSession: canSwitchCodexSession,
-                        canCaptureCodexSession: canCaptureCodexSession,
-                        canLinkCodexDesktopSession: canLinkCodexDesktopSession,
-                        canClearCodexDesktopSession: canClearCodexDesktopSession,
-                        canEnableCodexCLI: canEnableCodexCLI
+                        onRemove: onRemove
                     )
                 } else {
                     Spacer()
@@ -841,21 +775,10 @@ struct AccountMenuButton: View {
     var onRefresh: () -> Void = {}
     var onRename: () -> Void = {}
     var onPin: () -> Void = {}
-    var onSwitchCodexSession: () -> Void = {}
-    var onCaptureCodexSession: () -> Void = {}
-    var onLinkCodexDesktopSession: () -> Void = {}
-    var onClearCodexDesktopSession: () -> Void = {}
-    var onEnableCodexCLI: () -> Void = {}
     var onMoveUp: () -> Void = {}
     var onMoveDown: () -> Void = {}
     var onDisconnect: () -> Void = {}
     var onRemove: () -> Void = {}
-    var isActiveCodexSession: Bool = false
-    var canSwitchCodexSession: Bool = false
-    var canCaptureCodexSession: Bool = false
-    var canLinkCodexDesktopSession: Bool = false
-    var canClearCodexDesktopSession: Bool = false
-    var canEnableCodexCLI: Bool = false
 
     var body: some View {
         Menu {
@@ -870,42 +793,6 @@ struct AccountMenuButton: View {
                 Button { onPin() } label: {
                     Label(isPinned ? "Unpin from Menu Bar" : "Pin to Menu Bar",
                           systemImage: isPinned ? "pin.slash.fill" : "pin.fill")
-                }
-                if canSwitchCodexSession {
-                    Button { onSwitchCodexSession() } label: {
-                        Label(isActiveCodexSession ? "Current in Codex" : "Switch to This in Codex",
-                              systemImage: isActiveCodexSession ? "checkmark.seal.fill" : "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(isActiveCodexSession)
-                    if canCaptureCodexSession {
-                        Button { onCaptureCodexSession() } label: {
-                            Label("Save Codex Desktop session…", systemImage: "arrow.down.doc.fill")
-                        }
-                    }
-                    if canLinkCodexDesktopSession {
-                        Button { onLinkCodexDesktopSession() } label: {
-                            Label("Link to Codex user on disk…", systemImage: "link")
-                        }
-                    }
-                    if canClearCodexDesktopSession {
-                        Button(role: .destructive) { onClearCodexDesktopSession() } label: {
-                            Label("Clear saved Codex Desktop session", systemImage: "trash")
-                        }
-                    }
-                } else if canCaptureCodexSession {
-                    Button { onCaptureCodexSession() } label: {
-                        Label("Save Codex Desktop session…", systemImage: "arrow.down.doc.fill")
-                    }
-                    if canLinkCodexDesktopSession {
-                        Button { onLinkCodexDesktopSession() } label: {
-                            Label("Link to Codex user on disk…", systemImage: "link")
-                        }
-                    }
-                    if canClearCodexDesktopSession {
-                        Button(role: .destructive) { onClearCodexDesktopSession() } label: {
-                            Label("Clear saved Codex Desktop session", systemImage: "trash")
-                        }
-                    }
                 }
             }
             Divider()
